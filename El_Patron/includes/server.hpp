@@ -6,7 +6,7 @@
 /*   By: ale-coss <ale-coss@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/10/22 16:51:39 by ale-coss          #+#    #+#             */
-/*   Updated: 2026/10/23 15:16:08 by ale-coss         ###   ########.fr       */
+/*   Updated: 2026/10/25 19:29:12 by ale-coss         ###   ########.fr       */
 /*                                                                            */
 /******************************************************************************/
 
@@ -29,11 +29,20 @@ class Server
 		int _listenFd;
 
 		std::map<int, std::string> _clients;
+
+		std::map<int, std::string> _responses;
+		std::map<int, std::string::size_type> _bytesSent; // contient le nombre d'octets deja envoyes
+
 		Server(const Server& other);
 		Server& operator=(const Server& rhs);
 
 		void setupListeningSocket();
 		void closeClient(int clientFD);
+
+		std::string buildResponse() const;
+
+		void enableWriteEvent(int clientFd);
+		void handleClientWrite(int clientfd);
 };
 
 

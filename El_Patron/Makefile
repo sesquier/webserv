@@ -6,7 +6,7 @@
 #    By: ale-coss <ale-coss@student.42.fr>          +#+  +:+       +#+         #
 #                                                 +#+#+#+#+#+   +#+            #
 #    Created: 2025/05/12 19:10:39 by ale-coss          #+#    #+#              #
-#    Updated: 2026/10/22 17:54:50 by ale-coss         ###   ########.fr        #
+#    Updated: 2026/10/25 17:59:15 by ale-coss         ###   ########.fr        #
 #                                                                              #
 #******************************************************************************#
 
@@ -17,7 +17,7 @@ NAME = webserv
 # Fichiers source
 
 D_SRCS = ./srcs
-S_SRCS = main.cpp server.cpp 
+S_SRCS = main.cpp server.cpp request.cpp
 SRCS = $(addprefix $(D_SRCS)/, $(S_SRCS))
 
 # Fichiers includes

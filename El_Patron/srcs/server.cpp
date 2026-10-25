@@ -6,11 +6,12 @@
 /*   By: ale-coss <ale-coss@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/10/22 16:51:26 by ale-coss          #+#    #+#             */
-/*   Updated: 2026/10/25 16:29:51 by ale-coss         ###   ########.fr       */
+/*   Updated: 2026/10/25 19:35:41 by ale-coss         ###   ########.fr       */
 /*                                                                            */
 /******************************************************************************/
 
 #include "server.hpp"
+#include "request.hpp"
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -132,6 +133,8 @@ void Server::run()
 
 					ssize_t bytesReceived = recv(fd, buffer, sizeof(buffer), 0);
 
+					// std::cout << "DEBUG: recv returned " << bytesReceived << std::endl;
+
 					if (bytesReceived <= 0)
 					{
 						closeClient(fd);
@@ -140,9 +143,42 @@ void Server::run()
 
 					_clients[fd].append(buffer, bytesReceived);
 
-					std::cout << "Received from client " << fd << ": " << std::endl;
+					// //test temporaire
+					// std::cout << "DEBUG: Bytes received: ";
+					// for (ssize_t i = 0; i < bytesReceived; ++i)
+					// {
+					// 	std::cout << static_cast<int>(static_cast<unsigned char>(buffer[i])) << " ";
+					// }
+					// std::cout << std::endl;
+					// // std::cout.write(buffer, bytesReceived) << std::endl;
+					
+					//fin du test temporaire
 
-					std::cout.write(buffer, bytesReceived) << std::endl;
+					Request request;
+
+					
+					// on repart de la le 26/10
+					try
+					{
+						if (request.parse(_clients[fd]))
+						{
+							std::cout << "HTTP request parsed:" << std::endl;
+							std::cout << "Method: " << request.getMethod() << std::endl;
+							std::cout << "Target: " << request.getTarget() << std::endl;
+							std::cout << "Version: " << request.getVersion() << std::endl;
+
+							closeClient(fd);
+						}
+					}
+					catch (const std::exception& e)
+					{
+						std::cerr << "Invalid request: " << e.what() << std::endl;
+						closeClient(fd);
+					}
+
+					// std::cout << "Received from client " << fd << ": " << std::endl;
+
+					// std::cout.write(buffer, bytesReceived) << std::endl;
 				}
 			}
 		}
@@ -154,4 +190,65 @@ void Server::closeClient(int clientFd)
 	epoll_ctl(_epollFd, EPOLL_CTL_DEL, clientFd, NULL);
 	close(clientFd);
 	_clients.erase(clientFd);
+}
+
+std::string Server::buildResponse() const
+{
+	const std::string body = "Hello World !";
+
+	std::string response;
+	response += "HTTP/1.1 200 OK\r\n";
+	response += "Content-Type: text/plain\r\n";
+	response += "Content-Length: 12\r\n";
+	response += "Connexion: close \r\n";
+	response += "\r\n";
+	response += body;
+
+	return (response);
+}
+
+void Server::enableWriteEvent(int clientFd)
+{
+	struct epoll_event event;
+	std::memset(&event, 0, sizeof(event));
+
+	event.events = EPOLLOUT;
+	event.data.fd = clientFd;
+
+	if (epoll_ctl(_epollFd, EPOLL_CTL_MOD, clientFd, &event) == -1)
+		throw std::runtime_error("Failed to enable EPOLLOUT");
+}
+
+void Server::handleClientWrite(int clientFd)
+{
+    std::map<int, std::string>::iterator responseIt = _responses.find(clientFd);
+
+    std::map<int, std::string::size_type>::iterator sentIt = _bytesSent.find(clientFd);
+
+    if (responseIt == _responses.end() || sentIt == _bytesSent.end())
+    {
+        closeClient(clientFd);
+        return;
+    }
+
+    const std::string& response = responseIt->second;
+    std::string::size_type offset = sentIt->second;
+
+    if (offset >= response.size())
+    {
+        closeClient(clientFd);
+        return;
+    }
+
+    std::string::size_type remaining = response.size() - offset;
+
+    ssize_t bytesSent = send(clientFd, response.c_str() + offset, remaining, 0);
+
+    if (bytesSent > 0)
+    {
+        sentIt->second += static_cast<std::string::size_type>(bytesSent);
+
+        if (sentIt->second == response.size())
+            closeClient(clientFd);
+    }
 }
