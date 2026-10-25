@@ -1,0 +1,9 @@
+# Build output
+webserv
+.build/
+config_test
+
+# Editor / OS
+.vscode/
+*.swp
+.DS_Store
