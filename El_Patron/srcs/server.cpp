@@ -6,7 +6,7 @@
 /*   By: ale-coss <ale-coss@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/10/22 16:51:26 by ale-coss          #+#    #+#             */
-/*   Updated: 2026/10/25 19:35:41 by ale-coss         ###   ########.fr       */
+/*   Updated: 2026/10/26 14:48:13 by ale-coss         ###   ########.fr       */
 /*                                                                            */
 /******************************************************************************/
 
@@ -21,6 +21,7 @@
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
+#include <sstream>
 
 Server::Server() : _epollFd(-1), _listenFd(-1)
 {
@@ -98,8 +99,8 @@ void Server::run()
 			
 				if (clientFd == -1)
 					continue;
-
-				if (fcntl(clientFd, F_SETFL, O_NONBLOCK == -1))
+				int flags = fcntl(clientFd, F_GETFL, 0);
+				if (fcntl(clientFd, F_SETFL, flags | O_NONBLOCK) == -1)
 				{
 					close(clientFd);
 					continue;
@@ -110,7 +111,7 @@ void Server::run()
 				clientEvent.events = EPOLLIN;
 				clientEvent.data.fd = clientFd;
 
-				if (epoll_ctl(_epollFd, EPOLL_CTL_ADD,clientFd, &clientEvent) == -1)
+				if (epoll_ctl(_epollFd, EPOLL_CTL_ADD, clientFd, &clientEvent) == -1)
 				{
 					close(clientFd);
 					continue ;
@@ -127,12 +128,16 @@ void Server::run()
 					closeClient(fd);
 					continue;
 				}
+				if (events[i].events & EPOLLOUT)
+				{
+					handleClientWrite(fd);
+					continue ;
+				}
 				if (events[i].events & EPOLLIN)
 				{
 					char buffer[4096];
 
 					ssize_t bytesReceived = recv(fd, buffer, sizeof(buffer), 0);
-
 					// std::cout << "DEBUG: recv returned " << bytesReceived << std::endl;
 
 					if (bytesReceived <= 0)
@@ -158,27 +163,76 @@ void Server::run()
 
 					
 					// on repart de la le 26/10
+
+					bool requestComplete = false;
+
 					try
 					{
-						if (request.parse(_clients[fd]))
-						{
-							std::cout << "HTTP request parsed:" << std::endl;
-							std::cout << "Method: " << request.getMethod() << std::endl;
-							std::cout << "Target: " << request.getTarget() << std::endl;
-							std::cout << "Version: " << request.getVersion() << std::endl;
-
-							closeClient(fd);
-						}
+    					requestComplete = request.parse(_clients[fd]);
+						std::cout << (requestComplete == true ? "true" : "false" )<< "\n";
 					}
 					catch (const std::exception& e)
 					{
 						std::cerr << "Invalid request: " << e.what() << std::endl;
-						closeClient(fd);
+    					closeClient(fd);
+    					continue;
 					}
 
-					// std::cout << "Received from client " << fd << ": " << std::endl;
+					if (requestComplete)
+					{
+    					std::cout << "Request parsed: "
+              				<< request.getMethod() << " "
+              				<< request.getTarget() << " "
+              				<< request.getVersion() << std::endl;
 
-					// std::cout.write(buffer, bytesReceived) << std::endl;
+    					_responses[fd] = buildResponse();
+    					_bytesSent[fd] = 0;
+   						try
+   						{
+   						    enableWriteEvent(fd);
+   						}
+   						catch (const std::exception& e)
+   						{
+       						std::cerr << "Failed to prepare response: "
+	                  				<< e.what() << std::endl;
+       						closeClient(fd);
+    						}
+					}
+					else{
+						std::cout << "Invalid request\n";
+    					_responses[fd] = buildError();
+						_bytesSent[fd] = 0;
+   						try
+   						{
+   						    enableWriteEvent(fd);
+   						}
+   						catch (const std::exception& e)
+   						{
+       						std::cerr << "Failed to prepare response: "
+	                  				<< e.what() << std::endl;
+       						closeClient(fd);
+    						}
+					}					
+
+					// try
+					// {
+					// 	if (request.parse(_clients[fd]))
+					// 	{
+					// 		std::cout << "HTTP request parsed:" << std::endl;
+					// 		std::cout << "Method: " << request.getMethod() << std::endl;
+					// 		std::cout << "Target: " << request.getTarget() << std::endl;
+					// 		std::cout << "Version: " << request.getVersion() << std::endl;
+
+					// 		closeClient(fd);
+					// 	}
+					// }
+					// catch (const std::exception& e)
+					// {
+					// 	std::cerr << "Invalid request: " << e.what() << std::endl;
+					// 	closeClient(fd);
+					// }
+
+
 				}
 			}
 		}
@@ -190,17 +244,42 @@ void Server::closeClient(int clientFd)
 	epoll_ctl(_epollFd, EPOLL_CTL_DEL, clientFd, NULL);
 	close(clientFd);
 	_clients.erase(clientFd);
+	_responses.erase(clientFd);
+	_bytesSent.erase(clientFd);
 }
 
 std::string Server::buildResponse() const
 {
 	const std::string body = "Hello World !";
+	std::ostringstream lengthStream;
+	lengthStream << body.size();
 
 	std::string response;
 	response += "HTTP/1.1 200 OK\r\n";
 	response += "Content-Type: text/plain\r\n";
-	response += "Content-Length: 12\r\n";
-	response += "Connexion: close \r\n";
+	response += "Content-Length: ";
+	response += lengthStream.str();
+	response += "\r\n";
+	response += "Connection: close \r\n";
+	response += "\r\n";
+	response += body;
+
+	return (response);
+}
+
+std::string Server::buildError() const
+{
+	const std::string body = "Error";
+	std::ostringstream lengthStream;
+	lengthStream << body.size();
+
+	std::string response;
+	response += "HTTP/1.1 404 Not found\r\n";
+	response += "Content-Type: text/plain\r\n";
+	response += "Content-Length: ";
+	response += lengthStream.str();
+	response += "\r\n";
+	response += "Connection: close \r\n";
 	response += "\r\n";
 	response += body;
 

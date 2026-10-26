@@ -6,7 +6,7 @@
 /*   By: ale-coss <ale-coss@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/10/22 16:51:39 by ale-coss          #+#    #+#             */
-/*   Updated: 2026/10/25 19:29:12 by ale-coss         ###   ########.fr       */
+/*   Updated: 2026/10/26 17:00:41 by ale-coss         ###   ########.fr       */
 /*                                                                            */
 /******************************************************************************/
 
@@ -40,6 +40,8 @@ class Server
 		void closeClient(int clientFD);
 
 		std::string buildResponse() const;
+		std::string buildError() const;
+
 
 		void enableWriteEvent(int clientFd);
 		void handleClientWrite(int clientfd);
