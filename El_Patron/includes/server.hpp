@@ -6,7 +6,7 @@
 /*   By: ale-coss <ale-coss@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/10/22 16:51:39 by ale-coss          #+#    #+#             */
-/*   Updated: 2026/10/26 17:00:41 by ale-coss         ###   ########.fr       */
+/*   Updated: 2026/10/26 18:35:15 by ale-coss         ###   ########.fr       */
 /*                                                                            */
 /******************************************************************************/
 
@@ -28,7 +28,14 @@ class Server
 		int _epollFd;
 		int _listenFd;
 
+		enum ClientState
+		{
+			READING,
+			WRITING
+		};
+
 		std::map<int, std::string> _clients;
+		std::map<int, ClientState> _clientStates;
 
 		std::map<int, std::string> _responses;
 		std::map<int, std::string::size_type> _bytesSent; // contient le nombre d'octets deja envoyes

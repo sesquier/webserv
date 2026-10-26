@@ -6,7 +6,7 @@
 /*   By: ale-coss <ale-coss@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/10/22 16:51:26 by ale-coss          #+#    #+#             */
-/*   Updated: 2026/10/26 14:48:13 by ale-coss         ###   ########.fr       */
+/*   Updated: 2026/10/26 18:47:17 by ale-coss         ###   ########.fr       */
 /*                                                                            */
 /******************************************************************************/
 
@@ -22,6 +22,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <sstream>
+#include <cerrno>
 
 Server::Server() : _epollFd(-1), _listenFd(-1)
 {
@@ -118,6 +119,7 @@ void Server::run()
 				}
 
 				_clients[clientFd] = "";
+				_clientStates[clientFd] = READING;
 
 				std::cout << "Client connected: fd = " << clientFd << std::endl;
 			}
@@ -128,25 +130,46 @@ void Server::run()
 					closeClient(fd);
 					continue;
 				}
-				if (events[i].events & EPOLLOUT)
+
+				std::map<int, ClientState>::iterator stateIt = _clientStates.find(fd);
+
+				if (stateIt == _clientStates.end())
+				{
+					closeClient(fd);
+					continue ;
+				}
+
+				if (stateIt->second == WRITING && (events[i].events & EPOLLOUT))
 				{
 					handleClientWrite(fd);
 					continue ;
 				}
-				if (events[i].events & EPOLLIN)
+				if (stateIt->second == READING && (events[i].events & EPOLLIN))
 				{
 					char buffer[4096];
 
 					ssize_t bytesReceived = recv(fd, buffer, sizeof(buffer), 0);
 					// std::cout << "DEBUG: recv returned " << bytesReceived << std::endl;
 
-					if (bytesReceived <= 0)
+					if (bytesReceived > 0)
+					{
+						_clients[fd].append(buffer, bytesReceived);
+					}
+					else if (bytesReceived == 0)
 					{
 						closeClient(fd);
-						continue;
+						continue ;
+					}
+					else
+					{
+						if (errno == EAGAIN || errno == EWOULDBLOCK)
+							continue;
+						if (errno == EINTR)
+							continue ;
+						closeClient(fd);
+						continue ;
 					}
 
-					_clients[fd].append(buffer, bytesReceived);
 
 					// //test temporaire
 					// std::cout << "DEBUG: Bytes received: ";
@@ -162,7 +185,7 @@ void Server::run()
 					Request request;
 
 					
-					// on repart de la le 26/10
+	
 
 					bool requestComplete = false;
 
@@ -187,6 +210,8 @@ void Server::run()
 
     					_responses[fd] = buildResponse();
     					_bytesSent[fd] = 0;
+						_clientStates[fd] = WRITING;
+
    						try
    						{
    						    enableWriteEvent(fd);
@@ -246,6 +271,7 @@ void Server::closeClient(int clientFd)
 	_clients.erase(clientFd);
 	_responses.erase(clientFd);
 	_bytesSent.erase(clientFd);
+	_clientStates.erase(clientFd);
 }
 
 std::string Server::buildResponse() const
@@ -330,4 +356,20 @@ void Server::handleClientWrite(int clientFd)
         if (sentIt->second == response.size())
             closeClient(clientFd);
     }
+	else if (bytesSent == -1)
+	{
+		if (errno == EAGAIN || errno == EWOULDBLOCK)
+			return ;
+		if (errno == EINTR)
+			return ;
+		closeClient(clientFd);
+	}
+	else
+	{
+		closeClient(clientFd);
+	}
+
 }
+
+
+// tester le 27/10
