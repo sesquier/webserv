@@ -6,7 +6,7 @@
 /*   By: ale-coss <ale-coss@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/10/22 16:51:26 by ale-coss          #+#    #+#             */
-/*   Updated: 2026/10/26 18:47:17 by ale-coss         ###   ########.fr       */
+/*   Updated: 2026/10/27 14:58:30 by ale-coss         ###   ########.fr       */
 /*                                                                            */
 /******************************************************************************/
 
@@ -48,7 +48,8 @@ void Server::setupListeningSocket()
 	int opt = 1;
 	if (setsockopt(_listenFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1)
 		throw std::runtime_error("setsockopt failed");
-	if (fcntl(_listenFd, F_SETFL, O_NONBLOCK) == -1)
+	int flags = fcntl(_listenFd, F_GETFL, 0);
+	if (flags == -1 || fcntl(_listenFd, F_SETFL, O_NONBLOCK) == -1)
 		throw std::runtime_error("fcntl failed");
 
 	struct sockaddr_in addr;
@@ -101,7 +102,7 @@ void Server::run()
 				if (clientFd == -1)
 					continue;
 				int flags = fcntl(clientFd, F_GETFL, 0);
-				if (fcntl(clientFd, F_SETFL, flags | O_NONBLOCK) == -1)
+				if (flags == -1 || fcntl(clientFd, F_SETFL, flags | O_NONBLOCK) == -1)
 				{
 					close(clientFd);
 					continue;
@@ -125,10 +126,19 @@ void Server::run()
 			}
 			else
 			{
-				if (events[i].events & (EPOLLERR | EPOLLHUP))
+				if (events[i].events & EPOLLERR)
 				{
 					closeClient(fd);
 					continue;
+				}
+
+				if (events[i].events & EPOLLHUP)
+				{
+					if (!(events[i].events & EPOLLIN))
+					{
+						closeClient(fd);					
+						continue;
+					}
 				}
 
 				std::map<int, ClientState>::iterator stateIt = _clientStates.find(fd);
@@ -162,10 +172,10 @@ void Server::run()
 					}
 					else
 					{
-						if (errno == EAGAIN || errno == EWOULDBLOCK)
-							continue;
-						if (errno == EINTR)
-							continue ;
+						// if (errno == EAGAIN || errno == EWOULDBLOCK)
+						// 	continue;
+						// if (errno == EINTR)
+						// 	continue ;
 						closeClient(fd);
 						continue ;
 					}
@@ -192,12 +202,21 @@ void Server::run()
 					try
 					{
     					requestComplete = request.parse(_clients[fd]);
-						std::cout << (requestComplete == true ? "true" : "false" )<< "\n";
+						// std::cout << (requestComplete == true ? "true" : "false" )<< "\n";
 					}
 					catch (const std::exception& e)
 					{
 						std::cerr << "Invalid request: " << e.what() << std::endl;
-    					closeClient(fd);
+    					try
+						{
+							queueResponse(fd, buildResponse(400, "Bad Request", "400 Bad Request\n"));
+						}
+						catch (const std::exception& e)
+						{
+							std::cerr << "Failed to prepare response: "
+	                  				<< e.what() << std::endl;
+       						closeClient(fd);
+						}
     					continue;
 					}
 
@@ -208,36 +227,56 @@ void Server::run()
               				<< request.getTarget() << " "
               				<< request.getVersion() << std::endl;
 
-    					_responses[fd] = buildResponse();
-    					_bytesSent[fd] = 0;
-						_clientStates[fd] = WRITING;
+						std::string response;
+						if (request.getMethod() == "GET")
+						{
+							response = buildResponse(200, "OK", "Hello World!\n");
+						}
+						else
+						{
+							response = buildResponse(501, "Not Implemented", "501 Not Implemented\n");
+						}
 
-   						try
-   						{
-   						    enableWriteEvent(fd);
-   						}
-   						catch (const std::exception& e)
-   						{
-       						std::cerr << "Failed to prepare response: "
-	                  				<< e.what() << std::endl;
-       						closeClient(fd);
-    						}
-					}
-					else{
-						std::cout << "Invalid request\n";
-    					_responses[fd] = buildError();
-						_bytesSent[fd] = 0;
-   						try
-   						{
-   						    enableWriteEvent(fd);
-   						}
-   						catch (const std::exception& e)
-   						{
-       						std::cerr << "Failed to prepare response: "
-	                  				<< e.what() << std::endl;
-       						closeClient(fd);
-    						}
-					}					
+						try
+						{
+							queueResponse(fd, response);
+						}
+						catch (const std::exception& e)
+						{
+							std::cerr << "Failed to prepare response: " << e.what() << std::endl;
+							closeClient(fd);
+						}
+					}	
+    					// _responses[fd] = buildResponse();
+    					// _bytesSent[fd] = 0;
+						// _clientStates[fd] = WRITING;
+
+   						// try
+   						// {
+   						//     enableWriteEvent(fd);
+   						// }
+   						// catch (const std::exception& e)
+   						// {
+       					// 	std::cerr << "Failed to prepare response: "
+	                  	// 			<< e.what() << std::endl;
+       					// 	closeClient(fd);
+    					// 	}
+					// }
+					// else{
+					// 	std::cout << "Invalid request\n";
+    				// 	// _responses[fd] = buildError();
+					// 	_bytesSent[fd] = 0;
+   					// 	try
+   					// 	{
+   					// 	    enableWriteEvent(fd);
+   					// 	}
+   					// 	catch (const std::exception& e)
+   					// 	{
+       				// 		std::cerr << "Failed to prepare response: "
+	                //   				<< e.what() << std::endl;
+       				// 		closeClient(fd);
+    				// 		}
+					// }					
 
 					// try
 					// {
@@ -274,43 +313,53 @@ void Server::closeClient(int clientFd)
 	_clientStates.erase(clientFd);
 }
 
-std::string Server::buildResponse() const
+std::string Server::buildResponse(int statusCode, const std::string& reason, const std::string& body) const
 {
-	const std::string body = "Hello World !";
 	std::ostringstream lengthStream;
 	lengthStream << body.size();
 
 	std::string response;
-	response += "HTTP/1.1 200 OK\r\n";
+	response += "HTTP/1.1 ";
+
+	std::ostringstream statusStream;
+	statusStream << statusCode;
+	response += statusStream.str();
+	// response += statusCode == 200 ? "200" :
+	// 			statusCode == 400 ? "400" :
+	// 			statusCode == 501 ? "501" :
+	response += " ";
+	response += reason;
+	response += "\r\n";
+
 	response += "Content-Type: text/plain\r\n";
 	response += "Content-Length: ";
 	response += lengthStream.str();
 	response += "\r\n";
-	response += "Connection: close \r\n";
+	response += "Connection: close\r\n";
 	response += "\r\n";
 	response += body;
 
 	return (response);
 }
 
-std::string Server::buildError() const
-{
-	const std::string body = "Error";
-	std::ostringstream lengthStream;
-	lengthStream << body.size();
+// std::string Server::buildError() const
+// {
+// 	const std::string body = "Error";
+// 	std::ostringstream lengthStream;
+// 	lengthStream << body.size();
 
-	std::string response;
-	response += "HTTP/1.1 404 Not found\r\n";
-	response += "Content-Type: text/plain\r\n";
-	response += "Content-Length: ";
-	response += lengthStream.str();
-	response += "\r\n";
-	response += "Connection: close \r\n";
-	response += "\r\n";
-	response += body;
+// 	std::string response;
+// 	response += "HTTP/1.1 404 Not found\r\n";
+// 	response += "Content-Type: text/plain\r\n";
+// 	response += "Content-Length: ";
+// 	response += lengthStream.str();
+// 	response += "\r\n";
+// 	response += "Connection: close \r\n";
+// 	response += "\r\n";
+// 	response += body;
 
-	return (response);
-}
+// 	return (response);
+// }
 
 void Server::enableWriteEvent(int clientFd)
 {
@@ -347,7 +396,7 @@ void Server::handleClientWrite(int clientFd)
 
     std::string::size_type remaining = response.size() - offset;
 
-    ssize_t bytesSent = send(clientFd, response.c_str() + offset, remaining, 0);
+    ssize_t bytesSent = send(clientFd, response.c_str() + offset, remaining, MSG_NOSIGNAL);
 
     if (bytesSent > 0)
     {
@@ -356,14 +405,14 @@ void Server::handleClientWrite(int clientFd)
         if (sentIt->second == response.size())
             closeClient(clientFd);
     }
-	else if (bytesSent == -1)
-	{
-		if (errno == EAGAIN || errno == EWOULDBLOCK)
-			return ;
-		if (errno == EINTR)
-			return ;
-		closeClient(clientFd);
-	}
+	// else if (bytesSent == -1)
+	// {
+	// 	// if (errno == EAGAIN || errno == EWOULDBLOCK)
+	// 	// 	return ;
+	// 	// if (errno == EINTR)
+	// 	// 	return ;
+	// 	closeClient(clientFd);
+	// }
 	else
 	{
 		closeClient(clientFd);
@@ -371,5 +420,11 @@ void Server::handleClientWrite(int clientFd)
 
 }
 
+void Server::queueResponse(int clientFd, const std::string& response)
+{
+	_responses[clientFd] = response;
+	_bytesSent[clientFd] = 0;
+	_clientStates[clientFd] = WRITING;
 
-// tester le 27/10
+	enableWriteEvent(clientFd);
+}

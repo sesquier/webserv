@@ -6,7 +6,7 @@
 /*   By: ale-coss <ale-coss@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/10/22 16:51:39 by ale-coss          #+#    #+#             */
-/*   Updated: 2026/10/26 18:35:15 by ale-coss         ###   ########.fr       */
+/*   Updated: 2026/10/27 13:35:47 by ale-coss         ###   ########.fr       */
 /*                                                                            */
 /******************************************************************************/
 
@@ -46,9 +46,9 @@ class Server
 		void setupListeningSocket();
 		void closeClient(int clientFD);
 
-		std::string buildResponse() const;
-		std::string buildError() const;
-
+		std::string buildResponse(int statusCode, const std::string& reason, const std::string& body) const;
+		// std::string buildError() const;
+		void queueResponse(int clientFd, const std::string& response);
 
 		void enableWriteEvent(int clientFd);
 		void handleClientWrite(int clientfd);

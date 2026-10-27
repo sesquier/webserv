@@ -6,7 +6,7 @@
 /*   By: ale-coss <ale-coss@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/10/25 17:34:25 by ale-coss          #+#    #+#             */
-/*   Updated: 2026/10/25 18:51:11 by ale-coss         ###   ########.fr       */
+/*   Updated: 2026/10/27 14:18:26 by ale-coss         ###   ########.fr       */
 /*                                                                            */
 /******************************************************************************/
 
@@ -68,55 +68,6 @@ bool Request::parse(const std::string& raw)
 
     return true;
 }
-
-
-// bool Request::parse(const std::string& raw)
-// {
-// 	std::cout << "Debug: parse called, buffer size = " << raw.size() <<std::endl;
-// 	//en-tete doit etre termine avt parsing
-// 	std::string::size_type headersEnd = raw.find("\r\n\r\n");
-
-// 	if (headersEnd == std::string::npos)
-// 	{
-// 		std::cout << "Debug: Headers are not complete yet" <<std::endl;
-// 		return (false);
-// 	}
-	
-// 	std::cout << "Debug: end of debug found" <<std::endl;
-// 	// extraire prem ligne
-// 	std::string::size_type lineEnd = raw.find("\r\n");
-	
-// 	if (lineEnd == std::string::npos)
-// 		lineEnd = raw.find('\n');
-
-// 	if (lineEnd == std::string::npos || lineEnd > headersEnd)
-// 		throw std::runtime_error("Invalid HTTP request line");
-		
-// 	std::string line = raw.substr(0, lineEnd);
-
-// 	// rechercher espaces de separation
-// 	std::string::size_type firstSpace = line.find(' ');
-// 	if (firstSpace == std::string::npos)
-// 		throw std::runtime_error("Invalid HTTP request line");
-	
-// 	std::string::size_type secondSpace = line.find(' ', firstSpace + 1);
-// 	if (secondSpace == std::string::npos)
-// 		throw std::runtime_error("Invalid HTTP request line");
-
-// 	// extraire methode, cible version
-// 	_method = line.substr(0, firstSpace);
-// 	_target = line.substr(firstSpace + 1, secondSpace - firstSpace - 1);
-// 	_version = line.substr(secondSpace + 1);
-
-// 	if (_method.empty() || _target.empty() || _version.empty())
-// 		throw std::runtime_error("Invalid HTTP request line");
-	
-// 	// verif pas de champs supp
-// 	if (_version.find(' ') != std::string::npos)
-// 		throw std::runtime_error("Invalid HTTP request line");
-	
-// 	return (true);
-// }
 
 const std::string& Request::getMethod() const
 {
