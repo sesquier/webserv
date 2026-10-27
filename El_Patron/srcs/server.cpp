@@ -6,7 +6,7 @@
 /*   By: ale-coss <ale-coss@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/10/22 16:51:26 by ale-coss          #+#    #+#             */
-/*   Updated: 2026/10/27 14:58:30 by ale-coss         ###   ########.fr       */
+/*   Updated: 2026/10/27 16:05:16 by ale-coss         ###   ########.fr       */
 /*                                                                            */
 /******************************************************************************/
 
@@ -193,60 +193,101 @@ void Server::run()
 					//fin du test temporaire
 
 					Request request;
+					Request::ParseStatus parseStatus;
 
-					
-	
+					parseStatus = request.parse(_clients[fd]);
 
-					bool requestComplete = false;
-
-					try
+					if (parseStatus == Request::INCOMPLETE)
+						continue ;
+					if (parseStatus == Request::INVALID)
 					{
-    					requestComplete = request.parse(_clients[fd]);
-						// std::cout << (requestComplete == true ? "true" : "false" )<< "\n";
-					}
-					catch (const std::exception& e)
-					{
-						std::cerr << "Invalid request: " << e.what() << std::endl;
-    					try
+						try
 						{
 							queueResponse(fd, buildResponse(400, "Bad Request", "400 Bad Request\n"));
 						}
 						catch (const std::exception& e)
 						{
-							std::cerr << "Failed to prepare response: "
-	                  				<< e.what() << std::endl;
+							std::cerr << "Failed to prepare response: " << e.what() << std::endl;
        						closeClient(fd);
 						}
-    					continue;
+						continue ;
 					}
-
-					if (requestComplete)
-					{
-    					std::cout << "Request parsed: "
+					
+					std::cout << "Request parsed: "
               				<< request.getMethod() << " "
               				<< request.getTarget() << " "
               				<< request.getVersion() << std::endl;
 
-						std::string response;
-						if (request.getMethod() == "GET")
-						{
-							response = buildResponse(200, "OK", "Hello World!\n");
-						}
-						else
-						{
-							response = buildResponse(501, "Not Implemented", "501 Not Implemented\n");
-						}
+					std::string response;
+					if (request.getMethod() == "GET")
+					{
+						response = buildResponse(200, "OK", "Hello World!\n");
+					}
+					else
+					{
+						response = buildResponse(501, "Not Implemented", "501 Not Implemented\n");
+					}
 
-						try
-						{
-							queueResponse(fd, response);
-						}
-						catch (const std::exception& e)
-						{
-							std::cerr << "Failed to prepare response: " << e.what() << std::endl;
-							closeClient(fd);
-						}
-					}	
+					try
+					{
+						queueResponse(fd, response);
+					}
+					catch (const std::exception& e)
+					{
+						std::cerr << "Failed to prepare response: " << e.what() << std::endl;
+						closeClient(fd);
+					}
+
+					// bool requestComplete = false;
+
+					// try
+					// {
+    				// 	requestComplete = request.parse(_clients[fd]);
+					// 	// std::cout << (requestComplete == true ? "true" : "false" )<< "\n";
+					// }
+					// catch (const std::exception& e)
+					// {
+					// 	std::cerr << "Invalid request: " << e.what() << std::endl;
+    				// 	try
+					// 	{
+					// 		queueResponse(fd, buildResponse(400, "Bad Request", "400 Bad Request\n"));
+					// 	}
+					// 	catch (const std::exception& e)
+					// 	{
+					// 		std::cerr << "Failed to prepare response: "
+	                //   				<< e.what() << std::endl;
+       				// 		closeClient(fd);
+					// 	}
+    				// 	continue;
+					// }
+
+					// if (requestComplete)
+					// {
+    					// std::cout << "Request parsed: "
+              			// 	<< request.getMethod() << " "
+              			// 	<< request.getTarget() << " "
+              			// 	<< request.getVersion() << std::endl;
+
+						// std::string response;
+						// if (request.getMethod() == "GET")
+						// {
+						// 	response = buildResponse(200, "OK", "Hello World!\n");
+						// }
+						// else
+						// {
+						// 	response = buildResponse(501, "Not Implemented", "501 Not Implemented\n");
+						// }
+
+						// try
+						// {
+						// 	queueResponse(fd, response);
+						// }
+						// catch (const std::exception& e)
+						// {
+						// 	std::cerr << "Failed to prepare response: " << e.what() << std::endl;
+						// 	closeClient(fd);
+						// }
+					// }	
     					// _responses[fd] = buildResponse();
     					// _bytesSent[fd] = 0;
 						// _clientStates[fd] = WRITING;
