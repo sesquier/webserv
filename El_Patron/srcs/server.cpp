@@ -6,7 +6,7 @@
 /*   By: ale-coss <ale-coss@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/10/22 16:51:26 by ale-coss          #+#    #+#             */
-/*   Updated: 2026/10/27 16:05:16 by ale-coss         ###   ########.fr       */
+/*   Updated: 2026/10/29 14:38:11 by ale-coss         ###   ########.fr       */
 /*                                                                            */
 /******************************************************************************/
 
@@ -207,7 +207,34 @@ void Server::run()
 						}
 						catch (const std::exception& e)
 						{
-							std::cerr << "Failed to prepare response: " << e.what() << std::endl;
+							std::cerr << "Failed to prepare error response: " << e.what() << std::endl;
+       						closeClient(fd);
+						}
+						continue ;
+					}
+					if (parseStatus == Request::BODY_TOO_LARGE)
+					{
+						try
+						{
+							queueResponse(fd, buildResponse(413, "Content Too Large", "413 Content Too Large\n"));
+						}
+						catch (const std::exception& e)
+						{
+							std::cerr << "Failed to prepare error response: " << e.what() << std::endl;
+       						closeClient(fd);
+						}
+						continue ;
+					}
+
+					if (parseStatus == Request::HEADERS_TOO_LARGE)
+					{
+						try
+						{
+							queueResponse(fd, buildResponse(413, "Request Header Fields Too Large", "431 Request Header Fields Too Large\n"));
+						}
+						catch (const std::exception& e)
+						{
+							std::cerr << "Failed to prepare error response: " << e.what() << std::endl;
        						closeClient(fd);
 						}
 						continue ;

@@ -6,7 +6,7 @@
 /*   By: ale-coss <ale-coss@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/10/25 17:34:25 by ale-coss          #+#    #+#             */
-/*   Updated: 2026/10/27 16:03:28 by ale-coss         ###   ########.fr       */
+/*   Updated: 2026/10/29 14:34:28 by ale-coss         ###   ########.fr       */
 /*                                                                            */
 /******************************************************************************/
 
@@ -14,6 +14,9 @@
 #include <stdexcept>
 #include <iostream>
 #include <sstream>
+
+static const std::string::size_type MAX_BODY_SIZE = 1024 * 1024;
+static const std::string::size_type MAX_HEADERS_SIZE = 16 * 1024;
 
 Request::Request() : _method(), _target(), _version()
 {
@@ -38,7 +41,13 @@ Request::ParseStatus Request::parse(const std::string& raw)
     }
 
     if (headersEnd == std::string::npos)
+    {
+        if (raw.size() < MAX_HEADERS_SIZE)
+            return (HEADERS_TOO_LARGE);
         return (INCOMPLETE);
+    }
+    if (headersEnd > MAX_HEADERS_SIZE)
+        return (HEADERS_TOO_LARGE);
 
     std::string headers = raw.substr(0, headersEnd);
     // Locate the end of the request line.
@@ -107,17 +116,19 @@ Request::ParseStatus Request::parse(const std::string& raw)
             if (hasContentLength || value.empty())
                 return INVALID;
 
+            contentLength = 0;
+
             for (std::string::size_type i = 0; i < value.size(); ++i)
             {
                 if (value[i] < '0' || value[i] > '9')
                     return INVALID;
+
+                std::string::size_type digit = value[i] - '0';
+                if (contentLength > (MAX_BODY_SIZE - digit) / 10)
+                    return (BODY_TOO_LARGE);
+                contentLength = contentLength * 10 + digit;
             }
 
-            std::istringstream lengthStream(value);
-            lengthStream >> contentLength;
-
-            if (lengthStream.fail())
-                return INVALID;
             hasContentLength = true;
         }
         pos = end + 1;

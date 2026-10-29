@@ -6,7 +6,7 @@
 /*   By: ale-coss <ale-coss@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/10/25 17:27:20 by ale-coss          #+#    #+#             */
-/*   Updated: 2026/10/27 16:02:09 by ale-coss         ###   ########.fr       */
+/*   Updated: 2026/10/29 14:29:04 by ale-coss         ###   ########.fr       */
 /*                                                                            */
 /******************************************************************************/
 
@@ -22,7 +22,9 @@ class Request
 		{
 			INCOMPLETE,
 			COMPLETE,
-			INVALID
+			INVALID,
+			BODY_TOO_LARGE,
+			HEADERS_TOO_LARGE
 		};
 		
 		Request();
