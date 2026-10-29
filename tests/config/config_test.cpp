@@ -1,8 +1,10 @@
 // Standalone driver for the config module: reads a configuration file
 // and prints what the module produced. Not part of the webserv binary.
+// Usage: config_test [--tokens] [configuration file]
 
 #include "config/ConfigError.hpp"
 #include "config/ConfigFile.hpp"
+#include "config/ConfigParser.hpp"
 #include "config/Tokenizer.hpp"
 #include <iostream>
 #include <iomanip>
@@ -29,18 +31,44 @@ static void printTokens(const std::vector<Token>& tokens)
 	}
 }
 
+// Temporary summary until the real dump function exists.
+static void printServers(const std::vector<ServerConfig>& servers)
+{
+	for (size_t i = 0; i < servers.size(); i++)
+	{
+		std::cout << "server #" << i + 1 << std::endl;
+		for (size_t j = 0; j < servers[i].locations.size(); j++)
+			std::cout << "    location " << servers[i].locations[j].path << std::endl;
+	}
+}
+
 int main(int argc, char** argv)
 {
-	if (argc > 2)
+	int		arg = 1;
+	bool	showTokens = false;
+
+	if (arg < argc && std::string(argv[arg]) == "--tokens")
 	{
-		std::cerr << "usage: " << argv[0] << " [configuration file]" << std::endl;
+		showTokens = true;
+		arg++;
+	}
+	if (argc - arg > 1)
+	{
+		std::cerr << "usage: " << argv[0] << " [--tokens] [configuration file]" << std::endl;
 		return 1;
 	}
-	std::string path = (argc == 2) ? argv[1] : "config/default.conf";
+	std::string path = (arg < argc) ? argv[arg] : "config/default.conf";
 	try
 	{
-		Tokenizer tokenizer(readConfigFile(path));
-		printTokens(tokenizer.tokenize());
+		Tokenizer			tokenizer(readConfigFile(path));
+		std::vector<Token>	tokens = tokenizer.tokenize();
+
+		if (showTokens)
+			printTokens(tokens);
+		ConfigParser parser(tokens);
+		std::vector<ServerConfig> servers = parser.parse();
+		if (!showTokens)
+			printServers(servers);
 	}
 	catch (const ConfigError& e)
 	{

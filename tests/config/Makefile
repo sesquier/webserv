@@ -7,7 +7,8 @@ ROOT		= ../..
 D_SRCS		= $(ROOT)/srcs/config
 D_OBJS		= .build
 
-S_SRCS		= Token.cpp ConfigError.cpp ConfigFile.cpp Tokenizer.cpp
+S_SRCS		= Token.cpp ConfigError.cpp ConfigFile.cpp Tokenizer.cpp \
+			  LocationConfig.cpp ServerConfig.cpp ConfigParser.cpp
 SRCS		= $(addprefix $(D_SRCS)/, $(S_SRCS))
 OBJS		= $(addprefix $(D_OBJS)/, $(S_SRCS:.cpp=.o)) $(D_OBJS)/config_test.o
 HEADERS		= $(wildcard $(ROOT)/includes/config/*.hpp)
