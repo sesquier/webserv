@@ -6,7 +6,7 @@
 /*   By: ale-coss <ale-coss@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/10/22 16:51:39 by ale-coss          #+#    #+#             */
-/*   Updated: 2026/10/27 13:35:47 by ale-coss         ###   ########.fr       */
+/*   Updated: 2026/10/29 14:47:55 by ale-coss         ###   ########.fr       */
 /*                                                                            */
 /******************************************************************************/
 
@@ -15,6 +15,7 @@
 
 #include <map>
 #include <string>
+#include <ctime>
 
 class Server
 {
@@ -39,6 +40,7 @@ class Server
 
 		std::map<int, std::string> _responses;
 		std::map<int, std::string::size_type> _bytesSent; // contient le nombre d'octets deja envoyes
+		std::map<int, std::time_t> _lastActivity;
 
 		Server(const Server& other);
 		Server& operator=(const Server& rhs);

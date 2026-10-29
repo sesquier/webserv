@@ -6,7 +6,7 @@
 /*   By: ale-coss <ale-coss@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/10/22 16:51:26 by ale-coss          #+#    #+#             */
-/*   Updated: 2026/10/29 14:38:11 by ale-coss         ###   ########.fr       */
+/*   Updated: 2026/10/29 15:00:59 by ale-coss         ###   ########.fr       */
 /*                                                                            */
 /******************************************************************************/
 
@@ -83,10 +83,28 @@ void Server::run()
 
 	while (true)
 	{
-		int count = epoll_wait(_epollFd, events, 10, -1);
+		int count = epoll_wait(_epollFd, events, 10, 1000);
 
 		if (count == -1)
 			throw std::runtime_error("epoll_wait failed");
+		
+		std::time_t now = std::time(NULL);
+		std::map<int, std::time_t>::iterator activityIt = _lastActivity.begin();
+		while (activityIt != _lastActivity.end())
+		{
+			int clientFd = activityIt->first;
+			std::time_t lastActivity = activityIt->second;
+
+			if (now - lastActivity >= 30 && _clientStates[clientFd] == READING)
+			{
+				++activityIt;
+				closeClient(clientFd);
+			}
+			else
+			{
+				++activityIt;
+			}
+		}
 		
 		for (int i = 0; i < count; i++)
 		{
@@ -121,6 +139,7 @@ void Server::run()
 
 				_clients[clientFd] = "";
 				_clientStates[clientFd] = READING;
+				_lastActivity[clientFd] = std::time(NULL);
 
 				std::cout << "Client connected: fd = " << clientFd << std::endl;
 			}
@@ -164,6 +183,7 @@ void Server::run()
 					if (bytesReceived > 0)
 					{
 						_clients[fd].append(buffer, bytesReceived);
+						_lastActivity[fd] = std::time(NULL);
 					}
 					else if (bytesReceived == 0)
 					{
@@ -263,108 +283,7 @@ void Server::run()
 					{
 						std::cerr << "Failed to prepare response: " << e.what() << std::endl;
 						closeClient(fd);
-					}
-
-					// bool requestComplete = false;
-
-					// try
-					// {
-    				// 	requestComplete = request.parse(_clients[fd]);
-					// 	// std::cout << (requestComplete == true ? "true" : "false" )<< "\n";
-					// }
-					// catch (const std::exception& e)
-					// {
-					// 	std::cerr << "Invalid request: " << e.what() << std::endl;
-    				// 	try
-					// 	{
-					// 		queueResponse(fd, buildResponse(400, "Bad Request", "400 Bad Request\n"));
-					// 	}
-					// 	catch (const std::exception& e)
-					// 	{
-					// 		std::cerr << "Failed to prepare response: "
-	                //   				<< e.what() << std::endl;
-       				// 		closeClient(fd);
-					// 	}
-    				// 	continue;
-					// }
-
-					// if (requestComplete)
-					// {
-    					// std::cout << "Request parsed: "
-              			// 	<< request.getMethod() << " "
-              			// 	<< request.getTarget() << " "
-              			// 	<< request.getVersion() << std::endl;
-
-						// std::string response;
-						// if (request.getMethod() == "GET")
-						// {
-						// 	response = buildResponse(200, "OK", "Hello World!\n");
-						// }
-						// else
-						// {
-						// 	response = buildResponse(501, "Not Implemented", "501 Not Implemented\n");
-						// }
-
-						// try
-						// {
-						// 	queueResponse(fd, response);
-						// }
-						// catch (const std::exception& e)
-						// {
-						// 	std::cerr << "Failed to prepare response: " << e.what() << std::endl;
-						// 	closeClient(fd);
-						// }
-					// }	
-    					// _responses[fd] = buildResponse();
-    					// _bytesSent[fd] = 0;
-						// _clientStates[fd] = WRITING;
-
-   						// try
-   						// {
-   						//     enableWriteEvent(fd);
-   						// }
-   						// catch (const std::exception& e)
-   						// {
-       					// 	std::cerr << "Failed to prepare response: "
-	                  	// 			<< e.what() << std::endl;
-       					// 	closeClient(fd);
-    					// 	}
-					// }
-					// else{
-					// 	std::cout << "Invalid request\n";
-    				// 	// _responses[fd] = buildError();
-					// 	_bytesSent[fd] = 0;
-   					// 	try
-   					// 	{
-   					// 	    enableWriteEvent(fd);
-   					// 	}
-   					// 	catch (const std::exception& e)
-   					// 	{
-       				// 		std::cerr << "Failed to prepare response: "
-	                //   				<< e.what() << std::endl;
-       				// 		closeClient(fd);
-    				// 		}
-					// }					
-
-					// try
-					// {
-					// 	if (request.parse(_clients[fd]))
-					// 	{
-					// 		std::cout << "HTTP request parsed:" << std::endl;
-					// 		std::cout << "Method: " << request.getMethod() << std::endl;
-					// 		std::cout << "Target: " << request.getTarget() << std::endl;
-					// 		std::cout << "Version: " << request.getVersion() << std::endl;
-
-					// 		closeClient(fd);
-					// 	}
-					// }
-					// catch (const std::exception& e)
-					// {
-					// 	std::cerr << "Invalid request: " << e.what() << std::endl;
-					// 	closeClient(fd);
-					// }
-
-
+					}		
 				}
 			}
 		}
@@ -379,6 +298,7 @@ void Server::closeClient(int clientFd)
 	_responses.erase(clientFd);
 	_bytesSent.erase(clientFd);
 	_clientStates.erase(clientFd);
+	_lastActivity.erase(clientFd);
 }
 
 std::string Server::buildResponse(int statusCode, const std::string& reason, const std::string& body) const
