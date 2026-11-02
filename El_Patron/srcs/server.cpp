@@ -6,7 +6,7 @@
 /*   By: ale-coss <ale-coss@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/10/22 16:51:26 by ale-coss          #+#    #+#             */
-/*   Updated: 2026/11/02 16:33:22 by ale-coss         ###   ########.fr       */
+/*   Updated: 2026/11/02 19:28:21 by ale-coss         ###   ########.fr       */
 /*                                                                            */
 /******************************************************************************/
 
@@ -41,6 +41,56 @@ static bool isValidUploadFilename(const std::string& filename)
     return (true);
 }
 
+static int saveUploadedFile(const std::string& filePath, const std::string& body)
+{
+    int fileFd = open(
+        filePath.c_str(),
+        O_WRONLY | O_CREAT | O_EXCL,
+        0644
+    );
+
+    if (fileFd == -1)
+    {
+        struct stat fileInfo;
+
+        if (stat(filePath.c_str(), &fileInfo) == 0)
+            return (409);
+
+        return (500);
+    }
+
+    std::string::size_type offset = 0;
+    bool writeError = false;
+
+	while (offset < body.size())
+    {
+        ssize_t bytesWritten = write(
+            fileFd,
+            body.data() + offset,
+            body.size() - offset
+        );
+
+        if (bytesWritten <= 0)
+        {
+            writeError = true;
+            break;
+        }
+
+        offset += static_cast<std::string::size_type>(bytesWritten);
+    }
+
+    if (close(fileFd) == -1)
+        writeError = true;
+
+    if (writeError)
+    {
+        unlink(filePath.c_str());
+        return (500);
+    }
+
+    return (201);
+}
+
 Server::Server() : _epollFd(-1), _listenFd(-1)
 {
 	_epollFd = epoll_create(1);
@@ -66,7 +116,7 @@ void Server::setupListeningSocket()
 	if (setsockopt(_listenFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1)
 		throw std::runtime_error("setsockopt failed");
 	int flags = fcntl(_listenFd, F_GETFL, 0);
-	if (flags == -1 || fcntl(_listenFd, F_SETFL, O_NONBLOCK) == -1)
+	if (flags == -1 || fcntl(_listenFd, F_SETFL, flags | O_NONBLOCK) == -1)
 		throw std::runtime_error("fcntl failed");
 
 	struct sockaddr_in addr;
@@ -432,65 +482,115 @@ void Server::run()
 					}
 					else if (request.getMethod() == "POST")
 					{
-						std::string target = request.getTarget();
+    					std::string target = request.getTarget();
 
-						//retirer query string
-						std::string::size_type queryPos = target.find('?');
+    					std::string::size_type queryPos = target.find('?');
 
-						if (queryPos != std::string::npos)
-							target.erase(queryPos);
-						
-						//cette premiere version accepte iniquement /upload/nom_fichier.
-						const std::string prefix = "/upload/";
+    					if (queryPos != std::string::npos)
+        					target.erase(queryPos);
 
-						if (target.compare(0, prefix.size(), prefix) != 0)
-							response = buildResponse(404, "Not Found", "404 Not Found\n");
-						else if (!request.hasContentLength())
-							response = buildResponse(411, "Length Required", "411 Length Required\n");
-						else
-						{
-							std::string filename = target.substr(prefix.size());
-							
-							if (!isValidUploadFilename(filename))
-								response = buildResponse(400, "Bad Request", "400 Bad Request\n");
-							else
-							{
-								std::string filePath = "./www/uploads/" + filename;
+    					const std::string prefix = "/upload/";
 
-								int fileFd = open(filePath.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0644);
-
-								if (fileFd == -1)
-									response = buildResponse(500, "Internal Server Error", "500 Internal Server Error\n");
-								else
-								{
-									const std::string& body = request.getBody();
-									std::string::size_type offset = 0;
-									bool writeError = false;
-
-									while (offset < body.size())
-									{
-										ssize_t bytesWritten = write(fileFd, body.data() + offset, body.size() - offset);
-
-										if (bytesWritten <= 0)
-										{
-											writeError = true;
-											break;
-										}
-
-										offset += static_cast<std::string::size_type>(bytesWritten);
-									}
-									close(fileFd);
-
-									if (writeError)
-										response = buildResponse(500, "Internal Server Error", "500 Internal Server Error\n");
-									else
-										response = buildResponse(201, "Created", "201 Created\n");
-
-								}
-							}	
+    					if (target.compare(0, prefix.size(), prefix) != 0)
+    					{
+        					response = buildResponse(404, "Not Found", "404 Not Found\n");
 						}
+    					else if (!request.hasContentLength())
+    					{
+        					response = buildResponse(411, "Length Required", "411 Length Required\n");
+    					}
+						else
+    					{
+        					std::string filename = target.substr(prefix.size());
 
-					}
+        					if (!isValidUploadFilename(filename))
+        					{
+            					response = buildResponse(400, "Bad Request", "400 Bad Request\n");
+        					}
+        					else
+        					{
+            					std::string filePath = "./www/uploads/" + filename;
+
+            					int status = saveUploadedFile(filePath, request.getBody());
+		
+								if (status == 201)
+            					{
+                					response = buildResponse(201, "Created", "201 Created\n");
+            					}
+            					else if (status == 409)
+            					{
+                					response = buildResponse(409, "Conflict", "409 Conflict\n");
+            					}
+            					else
+            					{
+                					response = buildResponse(500, "Internal Server Error", "500 Internal Server Error\n");
+								}	
+            				}
+        				}
+    				}
+
+
+					// else if (request.getMethod() == "POST")
+					// {
+					// 	std::string target = request.getTarget();
+
+					// 	//retirer query string
+					// 	std::string::size_type queryPos = target.find('?');
+
+					// 	if (queryPos != std::string::npos)
+					// 		target.erase(queryPos);
+						
+					// 	//cette premiere version accepte iniquement /upload/nom_fichier.
+					// 	const std::string prefix = "/upload/";
+
+					// 	if (target.compare(0, prefix.size(), prefix) != 0)
+					// 		response = buildResponse(404, "Not Found", "404 Not Found\n");
+					// 	else if (!request.hasContentLength())
+					// 		response = buildResponse(411, "Length Required", "411 Length Required\n");
+					// 	else
+					// 	{
+					// 		std::string filename = target.substr(prefix.size());
+							
+					// 		if (!isValidUploadFilename(filename))
+					// 			response = buildResponse(400, "Bad Request", "400 Bad Request\n");
+					// 		else
+					// 		{
+					// 			std::string filePath = "./www/uploads/" + filename;
+
+					// 			int fileFd = open(filePath.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0644);
+
+					// 			if (fileFd == -1)
+					// 				response = buildResponse(500, "Internal Server Error", "500 Internal Server Error\n");
+					// 			else
+					// 			{
+					// 				const std::string& body = request.getBody();
+					// 				std::string::size_type offset = 0;
+					// 				bool writeError = false;
+
+					// 				while (offset < body.size())
+					// 				{
+					// 					ssize_t bytesWritten = write(fileFd, body.data() + offset, body.size() - offset);
+
+					// 					if (bytesWritten <= 0)
+					// 					{
+					// 						writeError = true;
+					// 						break;
+					// 					}
+
+					// 					offset += static_cast<std::string::size_type>(bytesWritten);
+					// 				}
+					// 				close(fileFd);
+
+					// 				if (writeError)
+					// 					response = buildResponse(500, "Internal Server Error", "500 Internal Server Error\n");
+					// 				else
+					// 					response = buildResponse(201, "Created", "201 Created\n");
+
+					// 			}
+					// 		}	
+					// 	}
+
+					// }
 					else if (request.getMethod() == "DELETE")
 					{
 						std::string target = request.getTarget();
