@@ -174,7 +174,7 @@ void ConfigParser::initHandlers()
 	_locationHandlers["index"] = &ConfigParser::parseLocationIndex;
 	_locationHandlers["client_max_body_size"] = &ConfigParser::ignoreLocationDirective;
 	_locationHandlers["error_page"] = &ConfigParser::ignoreLocationDirective;
-	_locationHandlers["methods"] = &ConfigParser::ignoreLocationDirective;
+	_locationHandlers["methods"] = &ConfigParser::parseMethods;
 	_locationHandlers["autoindex"] = &ConfigParser::parseAutoindex;
 	_locationHandlers["return"] = &ConfigParser::ignoreLocationDirective;
 	_locationHandlers["upload_store"] = &ConfigParser::ignoreLocationDirective;
@@ -214,6 +214,12 @@ void ConfigParser::applyLocationDirective(LocationConfig& location, const Direct
 void ConfigParser::requireArgCount(const Directive& directive, size_t expected) const
 {
 	if (directive.args.size() != expected)
+		throw ConfigError(directive.line, "wrong number of arguments for '" + directive.name + "'");
+}
+
+void ConfigParser::requireArgCount(const Directive& directive, size_t min, size_t max) const
+{
+	if (directive.args.size() < min || directive.args.size() > max)
 		throw ConfigError(directive.line, "wrong number of arguments for '" + directive.name + "'");
 }
 
@@ -264,6 +270,21 @@ void ConfigParser::parseAutoindex(LocationConfig& location, const Directive& dir
 	else
 		throw ConfigError(directive.line, "invalid value '" + directive.args[0]
 			+ "' for 'autoindex', expected 'on' or 'off'");
+}
+
+void ConfigParser::parseMethods(LocationConfig& location, const Directive& directive)
+{
+	requireArgCount(directive, 1, 3);
+	for (size_t i = 0; i < directive.args.size(); i++)
+	{
+		const std::string& method = directive.args[i];
+
+		if (method != "GET" && method != "POST" && method != "DELETE")
+			throw ConfigError(directive.line, "unknown method '" + method + "'");
+		if (location.isMethodAllowed(method))
+			throw ConfigError(directive.line, "method '" + method + "' listed twice");
+		location.methods.push_back(method);
+	}
 }
 
 void ConfigParser::ignoreServerDirective(ServerConfig&, const Directive&)

@@ -2,9 +2,8 @@
 // and prints what the module produced. Not part of the webserv binary.
 // Usage: config_test [--tokens] [configuration file]
 
-#include "config/ConfigError.hpp"
+#include "config/Config.hpp"
 #include "config/ConfigFile.hpp"
-#include "config/ConfigParser.hpp"
 #include "config/Tokenizer.hpp"
 #include <iostream>
 #include <iomanip>
@@ -47,7 +46,11 @@ static void printServers(const std::vector<ServerConfig>& servers)
 					  << "  root=" << location.root
 					  << "  hasOwnRoot=" << location.hasOwnRoot
 					  << "  index=" << location.index
-					  << "  autoindex=" << location.autoindex << std::endl;
+					  << "  autoindex=" << location.autoindex
+					  << "  methods=";
+			for (size_t k = 0; k < location.methods.size(); k++)
+				std::cout << location.methods[k] << " ";
+			std::cout << std::endl;
 		}
 	}
 }
@@ -70,13 +73,12 @@ int main(int argc, char** argv)
 	std::string path = (arg < argc) ? argv[arg] : "config/default.conf";
 	try
 	{
-		Tokenizer			tokenizer(readConfigFile(path));
-		std::vector<Token>	tokens = tokenizer.tokenize();
-
 		if (showTokens)
-			printTokens(tokens);
-		ConfigParser parser(tokens);
-		std::vector<ServerConfig> servers = parser.parse();
+		{
+			Tokenizer tokenizer(readConfigFile(path));
+			printTokens(tokenizer.tokenize());
+		}
+		std::vector<ServerConfig> servers = loadConfig(path);
 		if (!showTokens)
 			printServers(servers);
 	}

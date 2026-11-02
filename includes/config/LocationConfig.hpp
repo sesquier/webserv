@@ -25,6 +25,13 @@ struct LocationConfig
 	std::map<std::string, std::string>	cgi;			// ".py" -> "/usr/bin/python3"
 
 	LocationConfig();
+
+	bool	isMethodAllowed(const std::string& method) const;
 };
+
+// Not implemented yet.
+// Path on disk for a request path (without the query string).
+// Returns an empty string if the path contains a ".." segment.
+std::string resolvePath(const LocationConfig& location, const std::string& path);
 
 #endif

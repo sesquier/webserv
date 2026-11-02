@@ -61,6 +61,7 @@ class ConfigParser
 		void	applyServerDirective(ServerConfig& server, const Directive& directive);
 		void	applyLocationDirective(LocationConfig& location, const Directive& directive);
 		void	requireArgCount(const Directive& directive, size_t expected) const;
+		void	requireArgCount(const Directive& directive, size_t min, size_t max) const;
 		void	rejectDuplicate(std::set<std::string>& seen, const Directive& directive) const;
 
 		// Directive handlers
@@ -69,6 +70,7 @@ class ConfigParser
 		void	parseServerIndex(ServerConfig& server, const Directive& directive);
 		void	parseLocationIndex(LocationConfig& location, const Directive& directive);
 		void	parseAutoindex(LocationConfig& location, const Directive& directive);
+		void	parseMethods(LocationConfig& location, const Directive& directive);
 
 		// Placeholders until each directive is implemented
 		void	ignoreServerDirective(ServerConfig&, const Directive&);
