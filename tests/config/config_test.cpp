@@ -36,9 +36,19 @@ static void printServers(const std::vector<ServerConfig>& servers)
 {
 	for (size_t i = 0; i < servers.size(); i++)
 	{
-		std::cout << "server #" << i + 1 << std::endl;
+		std::cout << "server #" << i + 1
+				  << "  root=" << servers[i].root
+				  << "  index=" << servers[i].index << std::endl;
 		for (size_t j = 0; j < servers[i].locations.size(); j++)
-			std::cout << "    location " << servers[i].locations[j].path << std::endl;
+		{
+			const LocationConfig& location = servers[i].locations[j];
+
+			std::cout << "    location " << location.path
+					  << "  root=" << location.root
+					  << "  hasOwnRoot=" << location.hasOwnRoot
+					  << "  index=" << location.index
+					  << "  autoindex=" << location.autoindex << std::endl;
+		}
 	}
 }
 

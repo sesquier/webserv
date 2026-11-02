@@ -2,6 +2,7 @@
 #define CONFIGPARSER_HPP
 
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 #include "config/Token.hpp"
@@ -38,6 +39,8 @@ class ConfigParser
 		size_t									_pos;
 		std::map<std::string, ServerHandler>	_serverHandlers;
 		std::map<std::string, LocationHandler>	_locationHandlers;
+		std::set<std::string>					_seenInServer;		// directives of the current server
+		std::set<std::string>					_seenInLocation;	// directives of the current location
 
 		// Token navigation
 		bool			isAtEnd() const;
@@ -57,8 +60,17 @@ class ConfigParser
 		void	initHandlers();
 		void	applyServerDirective(ServerConfig& server, const Directive& directive);
 		void	applyLocationDirective(LocationConfig& location, const Directive& directive);
+		void	requireArgCount(const Directive& directive, size_t expected) const;
+		void	rejectDuplicate(std::set<std::string>& seen, const Directive& directive) const;
 
-		// Directive handlers (placeholders until each directive is implemented)
+		// Directive handlers
+		void	parseServerRoot(ServerConfig& server, const Directive& directive);
+		void	parseLocationRoot(LocationConfig& location, const Directive& directive);
+		void	parseServerIndex(ServerConfig& server, const Directive& directive);
+		void	parseLocationIndex(LocationConfig& location, const Directive& directive);
+		void	parseAutoindex(LocationConfig& location, const Directive& directive);
+
+		// Placeholders until each directive is implemented
 		void	ignoreServerDirective(ServerConfig&, const Directive&);
 		void	ignoreLocationDirective(LocationConfig&, const Directive&);
 

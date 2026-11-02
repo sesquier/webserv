@@ -81,6 +81,7 @@ ServerConfig ConfigParser::parseServer()
 	ServerConfig	server;
 	int				openLine = current().line;
 
+	_seenInServer.clear();
 	advance();
 	expect(Token::OPEN_BRACE, "'{' after 'server'");
 	while (!isBlockEnd(openLine))
@@ -100,6 +101,7 @@ LocationConfig ConfigParser::parseLocation()
 	LocationConfig	location;
 	int				openLine = current().line;
 
+	_seenInLocation.clear();
 	advance();
 	if (isAtEnd() || current().type != Token::WORD)
 		throw ConfigError(openLine, "missing path after 'location'");
@@ -163,17 +165,17 @@ std::string ConfigParser::normalizeLocationPath(const std::string& path)
 void ConfigParser::initHandlers()
 {
 	_serverHandlers["listen"] = &ConfigParser::ignoreServerDirective;
-	_serverHandlers["root"] = &ConfigParser::ignoreServerDirective;
-	_serverHandlers["index"] = &ConfigParser::ignoreServerDirective;
+	_serverHandlers["root"] = &ConfigParser::parseServerRoot;
+	_serverHandlers["index"] = &ConfigParser::parseServerIndex;
 	_serverHandlers["client_max_body_size"] = &ConfigParser::ignoreServerDirective;
 	_serverHandlers["error_page"] = &ConfigParser::ignoreServerDirective;
 
-	_locationHandlers["root"] = &ConfigParser::ignoreLocationDirective;
-	_locationHandlers["index"] = &ConfigParser::ignoreLocationDirective;
+	_locationHandlers["root"] = &ConfigParser::parseLocationRoot;
+	_locationHandlers["index"] = &ConfigParser::parseLocationIndex;
 	_locationHandlers["client_max_body_size"] = &ConfigParser::ignoreLocationDirective;
 	_locationHandlers["error_page"] = &ConfigParser::ignoreLocationDirective;
 	_locationHandlers["methods"] = &ConfigParser::ignoreLocationDirective;
-	_locationHandlers["autoindex"] = &ConfigParser::ignoreLocationDirective;
+	_locationHandlers["autoindex"] = &ConfigParser::parseAutoindex;
 	_locationHandlers["return"] = &ConfigParser::ignoreLocationDirective;
 	_locationHandlers["upload_store"] = &ConfigParser::ignoreLocationDirective;
 	_locationHandlers["cgi"] = &ConfigParser::ignoreLocationDirective;
@@ -190,6 +192,7 @@ void ConfigParser::applyServerDirective(ServerConfig& server, const Directive& d
 				"'" + directive.name + "' is not allowed in a server block");
 		throw ConfigError(directive.line, "unknown directive '" + directive.name + "'");
 	}
+	rejectDuplicate(_seenInServer, directive);
 	(this->*(it->second))(server, directive);
 }
 
@@ -204,10 +207,64 @@ void ConfigParser::applyLocationDirective(LocationConfig& location, const Direct
 				"'" + directive.name + "' is not allowed in a location block");
 		throw ConfigError(directive.line, "unknown directive '" + directive.name + "'");
 	}
+	rejectDuplicate(_seenInLocation, directive);
 	(this->*(it->second))(location, directive);
 }
 
+void ConfigParser::requireArgCount(const Directive& directive, size_t expected) const
+{
+	if (directive.args.size() != expected)
+		throw ConfigError(directive.line, "wrong number of arguments for '" + directive.name + "'");
+}
+
+// listen, error_page and cgi may repeat with different keys:
+// their own handlers check for a repeated key.
+void ConfigParser::rejectDuplicate(std::set<std::string>& seen, const Directive& directive) const
+{
+	if (directive.name == "listen" || directive.name == "error_page" || directive.name == "cgi")
+		return;
+	if (!seen.insert(directive.name).second)
+		throw ConfigError(directive.line, "duplicate '" + directive.name + "' directive");
+}
+
 // ===== Directive handlers =====
+
+void ConfigParser::parseServerRoot(ServerConfig& server, const Directive& directive)
+{
+	requireArgCount(directive, 1);
+	server.root = directive.args[0];
+}
+
+void ConfigParser::parseLocationRoot(LocationConfig& location, const Directive& directive)
+{
+	requireArgCount(directive, 1);
+	location.root = directive.args[0];
+	location.hasOwnRoot = true;
+}
+
+void ConfigParser::parseServerIndex(ServerConfig& server, const Directive& directive)
+{
+	requireArgCount(directive, 1);
+	server.index = directive.args[0];
+}
+
+void ConfigParser::parseLocationIndex(LocationConfig& location, const Directive& directive)
+{
+	requireArgCount(directive, 1);
+	location.index = directive.args[0];
+}
+
+void ConfigParser::parseAutoindex(LocationConfig& location, const Directive& directive)
+{
+	requireArgCount(directive, 1);
+	if (directive.args[0] == "on")
+		location.autoindex = true;
+	else if (directive.args[0] == "off")
+		location.autoindex = false;
+	else
+		throw ConfigError(directive.line, "invalid value '" + directive.args[0]
+			+ "' for 'autoindex', expected 'on' or 'off'");
+}
 
 void ConfigParser::ignoreServerDirective(ServerConfig&, const Directive&)
 {
