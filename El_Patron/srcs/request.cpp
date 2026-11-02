@@ -6,7 +6,7 @@
 /*   By: ale-coss <ale-coss@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/10/25 17:34:25 by ale-coss          #+#    #+#             */
-/*   Updated: 2026/11/02 14:17:59 by ale-coss         ###   ########.fr       */
+/*   Updated: 2026/11/02 18:11:34 by ale-coss         ###   ########.fr       */
 /*                                                                            */
 /******************************************************************************/
 
@@ -90,10 +90,10 @@ Request::ParseStatus Request::parse(const std::string& raw)
     _target = line.substr(firstSpace + 1, secondSpace - firstSpace - 1);
     _version = line.substr(secondSpace + 1);
 
-    if (_method.empty() || _target.empty() || _version.empty())
+    if (_method.empty() || _target.empty() || _version.empty() || _version.find(' ') != std::string::npos)
         return (INVALID);
 
-    if (_version.find(' ') != std::string::npos)
+    if (_version != "HTTP/1.0" && _version != "HTTP/1.1")
         return (INVALID);
     
     std::string::size_type contentLength = 0;
