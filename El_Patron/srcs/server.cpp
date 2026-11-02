@@ -6,7 +6,7 @@
 /*   By: ale-coss <ale-coss@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/10/22 16:51:26 by ale-coss          #+#    #+#             */
-/*   Updated: 2026/11/02 15:03:51 by ale-coss         ###   ########.fr       */
+/*   Updated: 2026/11/02 16:33:22 by ale-coss         ###   ########.fr       */
 /*                                                                            */
 /******************************************************************************/
 
@@ -24,6 +24,7 @@
 #include <stdexcept>
 #include <sstream>
 #include <cerrno>
+#include <cstdio>
 
 static bool isValidUploadFilename(const std::string& filename)
 {
@@ -489,6 +490,41 @@ void Server::run()
 							}	
 						}
 
+					}
+					else if (request.getMethod() == "DELETE")
+					{
+						std::string target = request.getTarget();
+						std::string::size_type queryPos = target.find('?');
+						
+						if (queryPos != std::string::npos)
+							target.erase(queryPos);
+
+						const std::string prefix = "/uploads/";
+
+						if (target.compare(0, prefix.size(), prefix) != 0)
+							response = buildResponse(404, "Not Found", "404 Not Found\n");
+						else
+						{
+							std::string filename = target.substr(prefix.size());
+
+							if (!isValidUploadFilename(filename))
+								response = buildResponse(400, "Bad Request", "400 Bad Request\n");
+							else
+							{
+								std::string filePath = "./www/uploads/" + filename;
+								struct stat fileInfo;
+
+								if (stat(filePath.c_str(), &fileInfo) || !S_ISREG(fileInfo.st_mode))
+									response = buildResponse(404, "Not Found", "404 Not Found\n");
+								else if (unlink(filePath.c_str()) == -1)
+									response = buildResponse(500, "Internal Server Error", "500 Internal Server Error\n");
+								else
+									response = buildResponse(204, "No Content", "");
+
+
+
+							}
+						}
 					}
 					else
 						response = buildResponse(501, "Not Implemented", "501 Not Implemented\n");
