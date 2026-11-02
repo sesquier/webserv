@@ -6,7 +6,7 @@
 /*   By: ale-coss <ale-coss@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/10/25 17:27:20 by ale-coss          #+#    #+#             */
-/*   Updated: 2026/10/29 14:29:04 by ale-coss         ###   ########.fr       */
+/*   Updated: 2026/11/02 13:05:18 by ale-coss         ###   ########.fr       */
 /*                                                                            */
 /******************************************************************************/
 
@@ -36,12 +36,16 @@ class Request
 		const std::string& getVersion() const;
 		const std::string& getBody() const;
 
+		bool hasContentLength() const;
+
 
 	private:
 		std::string _method;
 		std::string _target;
 		std::string _version;
 		std::string _body;
+
+		bool _hasContentLength;
 };
 
 

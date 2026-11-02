@@ -6,7 +6,7 @@
 /*   By: ale-coss <ale-coss@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/10/22 16:51:26 by ale-coss          #+#    #+#             */
-/*   Updated: 2026/10/29 15:00:59 by ale-coss         ###   ########.fr       */
+/*   Updated: 2026/11/02 15:03:51 by ale-coss         ###   ########.fr       */
 /*                                                                            */
 /******************************************************************************/
 
@@ -14,6 +14,7 @@
 #include "request.hpp"
 #include <sys/epoll.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -23,6 +24,21 @@
 #include <stdexcept>
 #include <sstream>
 #include <cerrno>
+
+static bool isValidUploadFilename(const std::string& filename)
+{
+    if (filename.empty() || filename == "." || filename == "..")
+        return (false);
+    
+    for (std::string::size_type i = 0; i < filename.size(); i++)
+    {
+        char c = filename[i];
+
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-'))
+            return (false);
+    }
+    return (true);
+}
 
 Server::Server() : _epollFd(-1), _listenFd(-1)
 {
@@ -95,7 +111,7 @@ void Server::run()
 			int clientFd = activityIt->first;
 			std::time_t lastActivity = activityIt->second;
 
-			if (now - lastActivity >= 30 && _clientStates[clientFd] == READING)
+			if (now - lastActivity >= 30)
 			{
 				++activityIt;
 				closeClient(clientFd);
@@ -128,7 +144,7 @@ void Server::run()
 
 				struct epoll_event clientEvent;
 				std::memset(&clientEvent, 0, sizeof(clientEvent));
-				clientEvent.events = EPOLLIN;
+				clientEvent.events = EPOLLIN | EPOLLRDHUP;
 				clientEvent.data.fd = clientFd;
 
 				if (epoll_ctl(_epollFd, EPOLL_CTL_ADD, clientFd, &clientEvent) == -1)
@@ -151,7 +167,7 @@ void Server::run()
 					continue;
 				}
 
-				if (events[i].events & EPOLLHUP)
+				if (events[i].events & (EPOLLHUP | EPOLLRDHUP))
 				{
 					if (!(events[i].events & EPOLLIN))
 					{
@@ -234,6 +250,8 @@ void Server::run()
 					}
 					if (parseStatus == Request::BODY_TOO_LARGE)
 					{
+						std::cerr << "DEBUG parseStatus = " << parseStatus << std::endl;
+						std::cerr << "DEBUG request = [" << _clients[fd] << "]" << std::endl;
 						try
 						{
 							queueResponse(fd, buildResponse(413, "Content Too Large", "413 Content Too Large\n"));
@@ -250,7 +268,7 @@ void Server::run()
 					{
 						try
 						{
-							queueResponse(fd, buildResponse(413, "Request Header Fields Too Large", "431 Request Header Fields Too Large\n"));
+							queueResponse(fd, buildResponse(431, "Request Header Fields Too Large", "431 Request Header Fields Too Large\n"));
 						}
 						catch (const std::exception& e)
 						{
@@ -266,14 +284,223 @@ void Server::run()
               				<< request.getVersion() << std::endl;
 
 					std::string response;
+
 					if (request.getMethod() == "GET")
+					{	
+						std::string target = request.getTarget();
+
+						// Retirer la query string, par exemple ?page=2.
+						std::string::size_type queryPos = target.find('?');
+
+						if (queryPos != std::string::npos)
+						target.erase(queryPos);
+
+						// Le chemin d'une cible HTTP doit commencer par '/'.
+						if (target.empty() || target[0] != '/')
+						{
+							response = buildResponse(400, "Bad Request", "400 Bad Request\n");
+						}
+						else
+						{
+							// Vérifier les segments du chemin pour empêcher
+							// les tentatives de remontée dans les répertoires.
+							bool forbidden = false;
+							std::string::size_type pos = 0;
+
+							while (pos < target.size())
+							{
+								std::string::size_type end = target.find('/', pos);
+
+								if (end == std::string::npos)
+									end = target.size();
+
+								std::string segment = target.substr(pos, end - pos);
+
+								if (segment == "..")
+								{
+									forbidden = true;
+									break;
+								}
+
+								if (end == target.size())
+									break;
+
+								pos = end + 1;
+							}
+
+							if (forbidden)
+							{
+								response = buildResponse(403, "Forbidden", "403 Forbidden\n");
+							}
+							else
+							{
+								// Pour '/', servir la page d'accueil.
+								if (target == "/")
+									target = "/index.html";
+
+								// Le répertoire public est temporairement fixé à ./www.
+								std::string filePath = "./www" + target;
+
+								int fileFd = open(filePath.c_str(), O_RDONLY);
+
+								if (fileFd == -1)
+								{
+									response = buildResponse(404, "Not Found", "404 Not Found\n");
+								}
+								else
+								{
+									struct stat fileInfo;
+
+									if (fstat(fileFd, &fileInfo) == -1 || !S_ISREG(fileInfo.st_mode))
+									{
+										close(fileFd);
+
+										response = buildResponse(404, "Not Found", "404 Not Found\n");
+									}
+									else
+									{
+										std::string body;
+										char buffer[4096];
+										bool readError = false;
+
+										while (true)
+										{
+											ssize_t bytesRead = read(fileFd, buffer, sizeof(buffer));
+
+											if (bytesRead > 0)
+											{
+												body.append(buffer, bytesRead);
+											}
+											else if (bytesRead == 0)
+											{
+												// Fin du fichier.
+												break;
+											}
+											else
+											{
+												// Pas de consultation d'errno après read().
+												readError = true;
+												break;
+											}
+										}
+
+										close(fileFd);
+
+										if (readError)
+										{
+											response = buildResponse(500, "Internal Server Error", "500 Internal Server Error\n");
+										}
+										else
+										{
+											// Déterminer le type de contenu grâce à l'extension.
+											std::string contentType = "application/octet-stream";
+
+											std::string::size_type dotPos =
+											target.find_last_of('.');
+
+											if (dotPos != std::string::npos)
+											{
+												std::string extension = target.substr(dotPos);
+
+												if (extension == ".html" || extension == ".htm")
+													contentType = "text/html";
+												else if (extension == ".css")
+													contentType = "text/css";
+												else if (extension == ".js")
+													contentType = "application/javascript";
+												else if (extension == ".txt")
+													contentType = "text/plain";
+												else if (extension == ".json")
+													contentType = "application/json";
+												else if (extension == ".png")
+													contentType = "image/png";
+												else if (extension == ".jpg" || extension == ".jpeg")
+													contentType = "image/jpeg";
+												else if (extension == ".gif")
+													contentType = "image/gif";
+												else if (extension == ".svg")
+													contentType = "image/svg+xml";
+											}
+
+											response = buildResponse(200, "OK", body, contentType);
+										}
+									}
+								}
+							}
+						}
+					}
+					else if (request.getMethod() == "POST")
 					{
-						response = buildResponse(200, "OK", "Hello World!\n");
+						std::string target = request.getTarget();
+
+						//retirer query string
+						std::string::size_type queryPos = target.find('?');
+
+						if (queryPos != std::string::npos)
+							target.erase(queryPos);
+						
+						//cette premiere version accepte iniquement /upload/nom_fichier.
+						const std::string prefix = "/upload/";
+
+						if (target.compare(0, prefix.size(), prefix) != 0)
+							response = buildResponse(404, "Not Found", "404 Not Found\n");
+						else if (!request.hasContentLength())
+							response = buildResponse(411, "Length Required", "411 Length Required\n");
+						else
+						{
+							std::string filename = target.substr(prefix.size());
+							
+							if (!isValidUploadFilename(filename))
+								response = buildResponse(400, "Bad Request", "400 Bad Request\n");
+							else
+							{
+								std::string filePath = "./www/uploads/" + filename;
+
+								int fileFd = open(filePath.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0644);
+
+								if (fileFd == -1)
+									response = buildResponse(500, "Internal Server Error", "500 Internal Server Error\n");
+								else
+								{
+									const std::string& body = request.getBody();
+									std::string::size_type offset = 0;
+									bool writeError = false;
+
+									while (offset < body.size())
+									{
+										ssize_t bytesWritten = write(fileFd, body.data() + offset, body.size() - offset);
+
+										if (bytesWritten <= 0)
+										{
+											writeError = true;
+											break;
+										}
+
+										offset += static_cast<std::string::size_type>(bytesWritten);
+									}
+									close(fileFd);
+
+									if (writeError)
+										response = buildResponse(500, "Internal Server Error", "500 Internal Server Error\n");
+									else
+										response = buildResponse(201, "Created", "201 Created\n");
+
+								}
+							}	
+						}
+
 					}
 					else
-					{
 						response = buildResponse(501, "Not Implemented", "501 Not Implemented\n");
-					}
+
+					// if (request.getMethod() == "GET")
+					// {
+					// 	response = buildResponse(200, "OK", "Hello World!\n");
+					// }
+					// else
+					// {
+					// 	response = buildResponse(501, "Not Implemented", "501 Not Implemented\n");
+					// }
 
 					try
 					{
@@ -301,30 +528,33 @@ void Server::closeClient(int clientFd)
 	_lastActivity.erase(clientFd);
 }
 
-std::string Server::buildResponse(int statusCode, const std::string& reason, const std::string& body) const
+std::string Server::buildResponse(int statusCode, const std::string& reason, const std::string& body, const std::string&  contentType) const
 {
 	std::ostringstream lengthStream;
 	lengthStream << body.size();
 
-	std::string response;
-	response += "HTTP/1.1 ";
-
 	std::ostringstream statusStream;
 	statusStream << statusCode;
+	
+	std::string response;
+	
+	response += "HTTP/1.1 ";
 	response += statusStream.str();
-	// response += statusCode == 200 ? "200" :
-	// 			statusCode == 400 ? "400" :
-	// 			statusCode == 501 ? "501" :
 	response += " ";
 	response += reason;
 	response += "\r\n";
 
-	response += "Content-Type: text/plain\r\n";
+	response += "Content-Type: ";
+	response += contentType;
+	response += "\r\n";
+
 	response += "Content-Length: ";
 	response += lengthStream.str();
 	response += "\r\n";
+	
 	response += "Connection: close\r\n";
 	response += "\r\n";
+	
 	response += body;
 
 	return (response);
@@ -354,7 +584,8 @@ void Server::enableWriteEvent(int clientFd)
 	struct epoll_event event;
 	std::memset(&event, 0, sizeof(event));
 
-	event.events = EPOLLOUT;
+	event.events = EPOLLOUT
+	;
 	event.data.fd = clientFd;
 
 	if (epoll_ctl(_epollFd, EPOLL_CTL_MOD, clientFd, &event) == -1)
@@ -389,6 +620,7 @@ void Server::handleClientWrite(int clientFd)
     if (bytesSent > 0)
     {
         sentIt->second += static_cast<std::string::size_type>(bytesSent);
+		_lastActivity[clientFd] = std::time(NULL);
 
         if (sentIt->second == response.size())
             closeClient(clientFd);
@@ -413,6 +645,7 @@ void Server::queueResponse(int clientFd, const std::string& response)
 	_responses[clientFd] = response;
 	_bytesSent[clientFd] = 0;
 	_clientStates[clientFd] = WRITING;
+	_lastActivity[clientFd] = std::time(NULL);
 
 	enableWriteEvent(clientFd);
 }

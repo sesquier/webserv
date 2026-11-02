@@ -6,7 +6,7 @@
 /*   By: ale-coss <ale-coss@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/10/25 17:34:25 by ale-coss          #+#    #+#             */
-/*   Updated: 2026/10/29 14:34:28 by ale-coss         ###   ########.fr       */
+/*   Updated: 2026/11/02 14:17:59 by ale-coss         ###   ########.fr       */
 /*                                                                            */
 /******************************************************************************/
 
@@ -14,11 +14,24 @@
 #include <stdexcept>
 #include <iostream>
 #include <sstream>
+#include <cstdio>
 
 static const std::string::size_type MAX_BODY_SIZE = 1024 * 1024;
 static const std::string::size_type MAX_HEADERS_SIZE = 16 * 1024;
 
-Request::Request() : _method(), _target(), _version()
+static std::string toLowerCase(const std::string& value)
+{
+    std::string result = value;
+
+    for (std::string::size_type i = 0; i < result.size(); i++)
+    {
+        if (result[i] >= 'A' && result[i] <= 'Z')
+            result[i] = result[i] - 'A' + 'a';
+    }
+    return (result);
+}
+
+Request::Request() : _method(), _target(), _version(), _hasContentLength(false)
 {
 
 }
@@ -29,6 +42,7 @@ Request::ParseStatus Request::parse(const std::string& raw)
     _target.clear();
     _version.clear();
     _body.clear();
+    _hasContentLength = false;
     // Accept CRLF CRLF or LF LF as the end of headers.
     std::string::size_type headersEnd =
         raw.find("\r\n\r\n");
@@ -42,7 +56,7 @@ Request::ParseStatus Request::parse(const std::string& raw)
 
     if (headersEnd == std::string::npos)
     {
-        if (raw.size() < MAX_HEADERS_SIZE)
+        if (raw.size() >= MAX_HEADERS_SIZE)
             return (HEADERS_TOO_LARGE);
         return (INCOMPLETE);
     }
@@ -111,10 +125,11 @@ Request::ParseStatus Request::parse(const std::string& raw)
         while (!value.empty() && (value[0] == ' ' || value[0] == '\t'))
             value.erase(0, 1);
 
-        if (name == "Content-Length")
+        if (toLowerCase(name) == "content-length")
         {
             if (hasContentLength || value.empty())
                 return INVALID;
+            _hasContentLength = true;
 
             contentLength = 0;
 
@@ -164,5 +179,9 @@ const std::string& Request::getBody() const
 	return (_body);
 }
 
+bool Request::hasContentLength() const
+{
+	return (_hasContentLength);
+}
 
 
