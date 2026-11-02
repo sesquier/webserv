@@ -30,6 +30,13 @@ static void printTokens(const std::vector<Token>& tokens)
 	}
 }
 
+static void printErrorPages(const std::map<int, std::string>& errorPages)
+{
+	for (std::map<int, std::string>::const_iterator it = errorPages.begin();
+		it != errorPages.end(); ++it)
+		std::cout << it->first << "->" << it->second << " ";
+}
+
 // Temporary summary until the real dump function exists.
 static void printServers(const std::vector<ServerConfig>& servers)
 {
@@ -37,7 +44,10 @@ static void printServers(const std::vector<ServerConfig>& servers)
 	{
 		std::cout << "server #" << i + 1
 				  << "  root=" << servers[i].root
-				  << "  index=" << servers[i].index << std::endl;
+				  << "  index=" << servers[i].index
+				  << "  errorPages=";
+		printErrorPages(servers[i].errorPages);
+		std::cout << std::endl;
 		for (size_t j = 0; j < servers[i].locations.size(); j++)
 		{
 			const LocationConfig& location = servers[i].locations[j];
@@ -50,6 +60,14 @@ static void printServers(const std::vector<ServerConfig>& servers)
 					  << "  methods=";
 			for (size_t k = 0; k < location.methods.size(); k++)
 				std::cout << location.methods[k] << " ";
+			std::cout << " uploadStore=" << location.uploadStore
+					  << "  return=" << location.redirectCode << " " << location.redirectUrl
+					  << "  cgi=";
+			for (std::map<std::string, std::string>::const_iterator it = location.cgi.begin();
+				it != location.cgi.end(); ++it)
+				std::cout << it->first << "->" << it->second << " ";
+			std::cout << " errorPages=";
+			printErrorPages(location.errorPages);
 			std::cout << std::endl;
 		}
 	}

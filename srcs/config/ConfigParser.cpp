@@ -1,5 +1,8 @@
 #include "config/ConfigParser.hpp"
 #include "config/ConfigError.hpp"
+#include <cctype>
+#include <climits>
+#include <cstdlib>
 
 ConfigParser::ConfigParser(const std::vector<Token>& tokens)
 	: _tokens(tokens), _pos(0)
@@ -160,6 +163,18 @@ std::string ConfigParser::normalizeLocationPath(const std::string& path)
 	return normalized;
 }
 
+// Converts a text made only of digits. The first character is checked because
+// strtol would accept a sign. It returns LONG_MAX when the number is too big.
+bool ConfigParser::parseNumber(const std::string& text, long& value)
+{
+	char* end;
+
+	if (text.empty() || !std::isdigit(static_cast<unsigned char>(text[0])))
+		return false;
+	value = std::strtol(text.c_str(), &end, 10);
+	return *end == '\0' && value != LONG_MAX;
+}
+
 // ===== Dispatch =====
 
 void ConfigParser::initHandlers()
@@ -168,17 +183,17 @@ void ConfigParser::initHandlers()
 	_serverHandlers["root"] = &ConfigParser::parseServerRoot;
 	_serverHandlers["index"] = &ConfigParser::parseServerIndex;
 	_serverHandlers["client_max_body_size"] = &ConfigParser::ignoreServerDirective;
-	_serverHandlers["error_page"] = &ConfigParser::ignoreServerDirective;
+	_serverHandlers["error_page"] = &ConfigParser::parseServerErrorPage;
 
 	_locationHandlers["root"] = &ConfigParser::parseLocationRoot;
 	_locationHandlers["index"] = &ConfigParser::parseLocationIndex;
 	_locationHandlers["client_max_body_size"] = &ConfigParser::ignoreLocationDirective;
-	_locationHandlers["error_page"] = &ConfigParser::ignoreLocationDirective;
+	_locationHandlers["error_page"] = &ConfigParser::parseLocationErrorPage;
 	_locationHandlers["methods"] = &ConfigParser::parseMethods;
 	_locationHandlers["autoindex"] = &ConfigParser::parseAutoindex;
-	_locationHandlers["return"] = &ConfigParser::ignoreLocationDirective;
-	_locationHandlers["upload_store"] = &ConfigParser::ignoreLocationDirective;
-	_locationHandlers["cgi"] = &ConfigParser::ignoreLocationDirective;
+	_locationHandlers["return"] = &ConfigParser::parseReturn;
+	_locationHandlers["upload_store"] = &ConfigParser::parseUploadStore;
+	_locationHandlers["cgi"] = &ConfigParser::parseCgi;
 }
 
 void ConfigParser::applyServerDirective(ServerConfig& server, const Directive& directive)
@@ -285,6 +300,60 @@ void ConfigParser::parseMethods(LocationConfig& location, const Directive& direc
 			throw ConfigError(directive.line, "method '" + method + "' listed twice");
 		location.methods.push_back(method);
 	}
+}
+
+void ConfigParser::parseUploadStore(LocationConfig& location, const Directive& directive)
+{
+	requireArgCount(directive, 1);
+	location.uploadStore = directive.args[0];
+}
+
+void ConfigParser::parseReturn(LocationConfig& location, const Directive& directive)
+{
+	long code;
+
+	requireArgCount(directive, 2);
+	if (!parseNumber(directive.args[0], code)
+		|| (code != 301 && code != 302 && code != 303 && code != 307 && code != 308))
+		throw ConfigError(directive.line, "invalid redirection code '" + directive.args[0] + "'");
+	location.redirectCode = static_cast<int>(code);
+	location.redirectUrl = directive.args[1];
+}
+
+void ConfigParser::parseCgi(LocationConfig& location, const Directive& directive)
+{
+	requireArgCount(directive, 2);
+
+	const std::string& extension = directive.args[0];
+
+	if (extension.size() < 2 || extension[0] != '.')
+		throw ConfigError(directive.line, "invalid cgi extension '" + extension + "'");
+	if (location.cgi.count(extension))
+		throw ConfigError(directive.line, "duplicate cgi extension '" + extension + "'");
+	location.cgi[extension] = directive.args[1];
+}
+
+void ConfigParser::parseServerErrorPage(ServerConfig& server, const Directive& directive)
+{
+	addErrorPage(server.errorPages, directive);
+}
+
+void ConfigParser::parseLocationErrorPage(LocationConfig& location, const Directive& directive)
+{
+	addErrorPage(location.errorPages, directive);
+}
+
+// Same rules at both levels: only the destination map changes.
+void ConfigParser::addErrorPage(std::map<int, std::string>& errorPages, const Directive& directive)
+{
+	long code;
+
+	requireArgCount(directive, 2);
+	if (!parseNumber(directive.args[0], code) || code < 400 || code > 599)
+		throw ConfigError(directive.line, "invalid error code '" + directive.args[0] + "'");
+	if (errorPages.count(static_cast<int>(code)))
+		throw ConfigError(directive.line, "duplicate error page for code '" + directive.args[0] + "'");
+	errorPages[static_cast<int>(code)] = directive.args[1];
 }
 
 void ConfigParser::ignoreServerDirective(ServerConfig&, const Directive&)

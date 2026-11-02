@@ -71,12 +71,19 @@ class ConfigParser
 		void	parseLocationIndex(LocationConfig& location, const Directive& directive);
 		void	parseAutoindex(LocationConfig& location, const Directive& directive);
 		void	parseMethods(LocationConfig& location, const Directive& directive);
+		void	parseUploadStore(LocationConfig& location, const Directive& directive);
+		void	parseReturn(LocationConfig& location, const Directive& directive);
+		void	parseCgi(LocationConfig& location, const Directive& directive);
+		void	parseServerErrorPage(ServerConfig& server, const Directive& directive);
+		void	parseLocationErrorPage(LocationConfig& location, const Directive& directive);
+		void	addErrorPage(std::map<int, std::string>& errorPages, const Directive& directive);
 
 		// Placeholders until each directive is implemented
 		void	ignoreServerDirective(ServerConfig&, const Directive&);
 		void	ignoreLocationDirective(LocationConfig&, const Directive&);
 
 		static std::string	normalizeLocationPath(const std::string& path);
+		static bool			parseNumber(const std::string& text, long& value);
 
 		ConfigParser(const ConfigParser& other);
 		ConfigParser& operator=(const ConfigParser& rhs);
