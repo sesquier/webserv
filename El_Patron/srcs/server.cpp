@@ -6,7 +6,7 @@
 /*   By: ale-coss <ale-coss@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/10/22 16:51:26 by ale-coss          #+#    #+#             */
-/*   Updated: 2026/11/02 19:28:21 by ale-coss         ###   ########.fr       */
+/*   Updated: 2026/11/03 16:14:16 by ale-coss         ###   ########.fr       */
 /*                                                                            */
 /******************************************************************************/
 
@@ -117,8 +117,11 @@ void Server::setupListeningSocket()
 		throw std::runtime_error("setsockopt failed");
 	int flags = fcntl(_listenFd, F_GETFL, 0);
 	if (flags == -1 || fcntl(_listenFd, F_SETFL, flags | O_NONBLOCK) == -1)
+	{
+		close(_listenFd);
+		_listenFd = -1;
 		throw std::runtime_error("fcntl failed");
-
+	}	
 	struct sockaddr_in addr;
 	std::memset(&addr, 0, sizeof(addr));
 
@@ -179,36 +182,39 @@ void Server::run()
 
 			if (fd == _listenFd)
 			{
-				struct sockaddr_in clientAddr;
-				socklen_t clientLen = sizeof(clientAddr);
+				while (true)
+				{
+					struct sockaddr_in clientAddr;
+					socklen_t clientLen = sizeof(clientAddr);
 
-				int clientFd = accept(_listenFd, reinterpret_cast<struct sockaddr*>(&clientAddr), &clientLen);
+					int clientFd = accept(_listenFd, reinterpret_cast<struct sockaddr*>(&clientAddr), &clientLen);
 			
-				if (clientFd == -1)
-					continue;
-				int flags = fcntl(clientFd, F_GETFL, 0);
-				if (flags == -1 || fcntl(clientFd, F_SETFL, flags | O_NONBLOCK) == -1)
-				{
-					close(clientFd);
-					continue;
+					if (clientFd == -1)
+						break;
+					int flags = fcntl(clientFd, F_GETFL, 0);
+					if (flags == -1 || fcntl(clientFd, F_SETFL, flags | O_NONBLOCK) == -1)
+					{
+						close(clientFd);
+						continue;
+					}
+
+					struct epoll_event clientEvent;
+					std::memset(&clientEvent, 0, sizeof(clientEvent));
+					clientEvent.events = EPOLLIN | EPOLLRDHUP;
+					clientEvent.data.fd = clientFd;
+
+					if (epoll_ctl(_epollFd, EPOLL_CTL_ADD, clientFd, &clientEvent) == -1)
+					{
+						close(clientFd);
+						continue ;
+					}
+
+					_clients[clientFd] = "";
+					_clientStates[clientFd] = READING;
+					_lastActivity[clientFd] = std::time(NULL);
+
+					std::cout << "Client connected: fd = " << clientFd << std::endl;
 				}
-
-				struct epoll_event clientEvent;
-				std::memset(&clientEvent, 0, sizeof(clientEvent));
-				clientEvent.events = EPOLLIN | EPOLLRDHUP;
-				clientEvent.data.fd = clientFd;
-
-				if (epoll_ctl(_epollFd, EPOLL_CTL_ADD, clientFd, &clientEvent) == -1)
-				{
-					close(clientFd);
-					continue ;
-				}
-
-				_clients[clientFd] = "";
-				_clientStates[clientFd] = READING;
-				_lastActivity[clientFd] = std::time(NULL);
-
-				std::cout << "Client connected: fd = " << clientFd << std::endl;
 			}
 			else
 			{
