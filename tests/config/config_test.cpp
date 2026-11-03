@@ -37,6 +37,14 @@ static void printErrorPages(const std::map<int, std::string>& errorPages)
 		std::cout << it->first << "->" << it->second << " ";
 }
 
+static void printBodySize(size_t size)
+{
+	if (size == BODY_SIZE_UNSET)
+		std::cout << "unset";
+	else
+		std::cout << size;
+}
+
 // Temporary summary until the real dump function exists.
 static void printServers(const std::vector<ServerConfig>& servers)
 {
@@ -45,8 +53,13 @@ static void printServers(const std::vector<ServerConfig>& servers)
 		std::cout << "server #" << i + 1
 				  << "  root=" << servers[i].root
 				  << "  index=" << servers[i].index
-				  << "  errorPages=";
+				  << "  maxBody=";
+		printBodySize(servers[i].maxBodySize);
+		std::cout << "  errorPages=";
 		printErrorPages(servers[i].errorPages);
+		std::cout << "  listens=";
+		for (size_t l = 0; l < servers[i].listens.size(); l++)
+			std::cout << servers[i].listens[l].host << ":" << servers[i].listens[l].port << " ";
 		std::cout << std::endl;
 		for (size_t j = 0; j < servers[i].locations.size(); j++)
 		{
@@ -66,7 +79,9 @@ static void printServers(const std::vector<ServerConfig>& servers)
 			for (std::map<std::string, std::string>::const_iterator it = location.cgi.begin();
 				it != location.cgi.end(); ++it)
 				std::cout << it->first << "->" << it->second << " ";
-			std::cout << " errorPages=";
+			std::cout << " maxBody=";
+			printBodySize(location.maxBodySize);
+			std::cout << "  errorPages=";
 			printErrorPages(location.errorPages);
 			std::cout << std::endl;
 		}

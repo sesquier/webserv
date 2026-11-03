@@ -41,6 +41,7 @@ class ConfigParser
 		std::map<std::string, LocationHandler>	_locationHandlers;
 		std::set<std::string>					_seenInServer;		// directives of the current server
 		std::set<std::string>					_seenInLocation;	// directives of the current location
+		std::vector<ListenAddress>				_usedAddresses;		// every 'listen' of the file so far
 
 		// Token navigation
 		bool			isAtEnd() const;
@@ -55,6 +56,8 @@ class ConfigParser
 		LocationConfig	parseLocation();
 		Directive		parseDirective();
 		void			rejectNestedBlock(const std::string& context) const;
+		void			addLocation(ServerConfig& server);
+		void			requireEssentials(const ServerConfig& server, int openLine) const;
 
 		// Dispatch to the directive handlers
 		void	initHandlers();
@@ -77,13 +80,16 @@ class ConfigParser
 		void	parseServerErrorPage(ServerConfig& server, const Directive& directive);
 		void	parseLocationErrorPage(LocationConfig& location, const Directive& directive);
 		void	addErrorPage(std::map<int, std::string>& errorPages, const Directive& directive);
-
-		// Placeholders until each directive is implemented
-		void	ignoreServerDirective(ServerConfig&, const Directive&);
-		void	ignoreLocationDirective(LocationConfig&, const Directive&);
+		void	parseServerBodySize(ServerConfig& server, const Directive& directive);
+		void	parseLocationBodySize(LocationConfig& location, const Directive& directive);
+		size_t	readBodySize(const Directive& directive);
+		void	parseListen(ServerConfig& server, const Directive& directive);
 
 		static std::string	normalizeLocationPath(const std::string& path);
 		static bool			parseNumber(const std::string& text, long& value);
+		static bool			isValidIpv4(const std::string& ip);
+		static bool			isValidIpv4Part(const std::string& part);
+		static bool			addressesConflict(const ListenAddress& a, const ListenAddress& b);
 
 		ConfigParser(const ConfigParser& other);
 		ConfigParser& operator=(const ConfigParser& rhs);

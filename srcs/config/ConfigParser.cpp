@@ -21,6 +21,7 @@ std::vector<ServerConfig> ConfigParser::parse()
 	std::vector<ServerConfig> servers;
 
 	_pos = 0;
+	_usedAddresses.clear();
 	while (!isAtEnd())
 	{
 		if (!isWord("server"))
@@ -91,12 +92,36 @@ ServerConfig ConfigParser::parseServer()
 	{
 		rejectNestedBlock("server");
 		if (isWord("location"))
-			server.locations.push_back(parseLocation());
+			addLocation(server);
 		else
 			applyServerDirective(server, parseDirective());
 	}
+	requireEssentials(server, openLine);
 	advance();
 	return server;
+}
+
+// Prefixes are compared after normalization: "/files" and "/files/" are the same.
+void ConfigParser::addLocation(ServerConfig& server)
+{
+	int				line = current().line;
+	LocationConfig	location = parseLocation();
+
+	for (size_t i = 0; i < server.locations.size(); i++)
+	{
+		if (server.locations[i].path == location.path)
+			throw ConfigError(line, "duplicate location '" + location.path + "'");
+	}
+	server.locations.push_back(location);
+}
+
+// Checked at the end of the block: these directives can appear in any order.
+void ConfigParser::requireEssentials(const ServerConfig& server, int openLine) const
+{
+	if (server.listens.empty())
+		throw ConfigError(openLine, "server has no 'listen' directive");
+	if (server.root.empty())
+		throw ConfigError(openLine, "server has no 'root' directive");
 }
 
 LocationConfig ConfigParser::parseLocation()
@@ -175,19 +200,47 @@ bool ConfigParser::parseNumber(const std::string& text, long& value)
 	return *end == '\0' && value != LONG_MAX;
 }
 
+// Exactly four parts: every part but the last one must end with a dot.
+bool ConfigParser::isValidIpv4(const std::string& ip)
+{
+	size_t start = 0;
+
+	for (int part = 0; part < 4; part++)
+	{
+		size_t dot = ip.find('.', start);
+
+		if ((part < 3) != (dot != std::string::npos))
+			return false;
+		if (!isValidIpv4Part(ip.substr(start, dot - start)))
+			return false;
+		start = dot + 1;
+	}
+	return true;
+}
+
+// A leading zero is refused: getaddrinfo may read "010" as octal, so 8.
+bool ConfigParser::isValidIpv4Part(const std::string& part)
+{
+	long value;
+
+	if (part.size() > 1 && part[0] == '0')
+		return false;
+	return parseNumber(part, value) && value <= 255;
+}
+
 // ===== Dispatch =====
 
 void ConfigParser::initHandlers()
 {
-	_serverHandlers["listen"] = &ConfigParser::ignoreServerDirective;
+	_serverHandlers["listen"] = &ConfigParser::parseListen;
 	_serverHandlers["root"] = &ConfigParser::parseServerRoot;
 	_serverHandlers["index"] = &ConfigParser::parseServerIndex;
-	_serverHandlers["client_max_body_size"] = &ConfigParser::ignoreServerDirective;
+	_serverHandlers["client_max_body_size"] = &ConfigParser::parseServerBodySize;
 	_serverHandlers["error_page"] = &ConfigParser::parseServerErrorPage;
 
 	_locationHandlers["root"] = &ConfigParser::parseLocationRoot;
 	_locationHandlers["index"] = &ConfigParser::parseLocationIndex;
-	_locationHandlers["client_max_body_size"] = &ConfigParser::ignoreLocationDirective;
+	_locationHandlers["client_max_body_size"] = &ConfigParser::parseLocationBodySize;
 	_locationHandlers["error_page"] = &ConfigParser::parseLocationErrorPage;
 	_locationHandlers["methods"] = &ConfigParser::parseMethods;
 	_locationHandlers["autoindex"] = &ConfigParser::parseAutoindex;
@@ -356,10 +409,77 @@ void ConfigParser::addErrorPage(std::map<int, std::string>& errorPages, const Di
 	errorPages[static_cast<int>(code)] = directive.args[1];
 }
 
-void ConfigParser::ignoreServerDirective(ServerConfig&, const Directive&)
+void ConfigParser::parseServerBodySize(ServerConfig& server, const Directive& directive)
 {
+	server.maxBodySize = readBodySize(directive);
 }
 
-void ConfigParser::ignoreLocationDirective(LocationConfig&, const Directive&)
+void ConfigParser::parseLocationBodySize(LocationConfig& location, const Directive& directive)
 {
+	location.maxBodySize = readBodySize(directive);
+}
+
+// "1024" is in bytes, "10K" and "10M" are multiplied. The limit is checked
+// before the multiplication, which could otherwise overflow.
+size_t ConfigParser::readBodySize(const Directive& directive)
+{
+	requireArgCount(directive, 1);
+
+	std::string	number = directive.args[0];
+	char		unit = number[number.size() - 1];
+	long		multiplier = 1;
+	long		value;
+
+	if (unit == 'K')
+		multiplier = 1024;
+	else if (unit == 'M')
+		multiplier = 1024 * 1024;
+	if (multiplier != 1)
+		number.erase(number.size() - 1);
+	if (!parseNumber(number, value) || value > LONG_MAX / multiplier)
+		throw ConfigError(directive.line, "invalid size '" + directive.args[0] + "'");
+	return static_cast<size_t>(value * multiplier);
+}
+
+// "8080" listens on every interface. "localhost" becomes 127.0.0.1 here,
+// so that comparing two addresses as text stays correct.
+void ConfigParser::parseListen(ServerConfig& server, const Directive& directive)
+{
+	requireArgCount(directive, 1);
+
+	const std::string&	text = directive.args[0];
+	size_t				colon = text.find(':');
+	std::string			portText = text;
+	ListenAddress		address;
+	long				port;
+
+	address.host = "0.0.0.0";
+	if (colon != std::string::npos)
+	{
+		address.host = text.substr(0, colon);
+		portText = text.substr(colon + 1);
+	}
+	if (address.host == "localhost")
+		address.host = "127.0.0.1";
+	if (!isValidIpv4(address.host))
+		throw ConfigError(directive.line, "invalid address '" + address.host + "' in 'listen'");
+	if (!parseNumber(portText, port) || port < 1 || port > 65535)
+		throw ConfigError(directive.line, "invalid port '" + portText + "' in 'listen'");
+	address.port = static_cast<int>(port);
+	for (size_t i = 0; i < _usedAddresses.size(); i++)
+	{
+		if (addressesConflict(_usedAddresses[i], address))
+			throw ConfigError(directive.line, "address '" + text + "' conflicts with an earlier 'listen'");
+	}
+	_usedAddresses.push_back(address);
+	server.listens.push_back(address);
+}
+
+// 0.0.0.0 takes the port on every interface, so bind() would fail
+// for any other address on that port.
+bool ConfigParser::addressesConflict(const ListenAddress& a, const ListenAddress& b)
+{
+	if (a.port != b.port)
+		return false;
+	return a.host == b.host || a.host == "0.0.0.0" || b.host == "0.0.0.0";
 }

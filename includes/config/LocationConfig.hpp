@@ -6,6 +6,10 @@
 #include <string>
 #include <vector>
 
+// Value of maxBodySize until the directive is read or inherited. 0 cannot play
+// this role: it is a real limit. The parser never produces this value.
+const size_t BODY_SIZE_UNSET = static_cast<size_t>(-1);
+
 // Settings of one "location <prefix> { ... }" block.
 // Read-only for the HTTP side: every value is validated, converted
 // and inherited from the server by the config module.
