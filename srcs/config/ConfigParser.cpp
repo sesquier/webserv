@@ -97,6 +97,7 @@ ServerConfig ConfigParser::parseServer()
 			applyServerDirective(server, parseDirective());
 	}
 	requireEssentials(server, openLine);
+	finalizeServer(server);
 	advance();
 	return server;
 }
@@ -146,6 +147,7 @@ LocationConfig ConfigParser::parseLocation()
 			throw ConfigError(current().line, "nested location is not allowed");
 		applyLocationDirective(location, parseDirective());
 	}
+	applyLocationDefaults(location);
 	advance();
 	return location;
 }
@@ -176,6 +178,60 @@ void ConfigParser::rejectNestedBlock(const std::string& context) const
 {
 	if (isWord("server"))
 		throw ConfigError(current().line, "'server' block is not allowed inside a " + context);
+}
+
+// Runs at the end of the block: the server's directives may follow its locations.
+// Defaults come first so that locations inherit complete values.
+void ConfigParser::finalizeServer(ServerConfig& server)
+{
+	applyServerDefaults(server);
+	ensureRootLocation(server);
+	for (size_t i = 0; i < server.locations.size(); i++)
+		inheritFromServer(server.locations[i], server);
+}
+
+// index and maxBodySize get no default in a location: they come from its server.
+void ConfigParser::applyServerDefaults(ServerConfig& server)
+{
+	if (server.index.empty())
+		server.index = "index.html";
+	if (server.maxBodySize == BODY_SIZE_UNSET)
+		server.maxBodySize = 1024 * 1024;
+}
+
+void ConfigParser::applyLocationDefaults(LocationConfig& location)
+{
+	if (location.methods.empty())
+		location.methods.push_back("GET");
+}
+
+// Guarantees that every request path matches at least one location.
+void ConfigParser::ensureRootLocation(ServerConfig& server)
+{
+	for (size_t i = 0; i < server.locations.size(); i++)
+	{
+		if (server.locations[i].path == "/")
+			return;
+	}
+
+	LocationConfig location;
+
+	location.path = "/";
+	applyLocationDefaults(location);
+	server.locations.push_back(location);
+}
+
+// hasOwnRoot stays false for an inherited root: resolvePath depends on it.
+// map::insert keeps existing keys, so a location's own error pages win.
+void ConfigParser::inheritFromServer(LocationConfig& location, const ServerConfig& server)
+{
+	if (!location.hasOwnRoot)
+		location.root = server.root;
+	if (location.index.empty())
+		location.index = server.index;
+	if (location.maxBodySize == BODY_SIZE_UNSET)
+		location.maxBodySize = server.maxBodySize;
+	location.errorPages.insert(server.errorPages.begin(), server.errorPages.end());
 }
 
 // "/files/" and "/files" are the same prefix; "/" stays "/".

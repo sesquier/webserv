@@ -85,6 +85,11 @@ class ConfigParser
 		size_t	readBodySize(const Directive& directive);
 		void	parseListen(ServerConfig& server, const Directive& directive);
 
+		static void			finalizeServer(ServerConfig& server);
+		static void			applyServerDefaults(ServerConfig& server);
+		static void			ensureRootLocation(ServerConfig& server);
+		static void			inheritFromServer(LocationConfig& location, const ServerConfig& server);
+		static void			applyLocationDefaults(LocationConfig& location);
 		static std::string	normalizeLocationPath(const std::string& path);
 		static bool			parseNumber(const std::string& text, long& value);
 		static bool			isValidIpv4(const std::string& ip);
