@@ -29,18 +29,19 @@ D_INC = ./includes/
 
 # Couleurs
 
-DEFAULT = \033[0m 
-WHITE = \033[1;37m 
-GREEN = \033[0;92m 
-YELLOW = \033[0;93m 
-CYAN = \033[0;96m 
-UNDERLINE = \033[4m 
+DEFAULT = \033[0m
+WHITE = \033[1;37m
+GREEN = \033[0;92m
+YELLOW = \033[0;93m
+CYAN = \033[0;96m
+UNDERLINE = \033[4m
 BOLD = \033[1m
 
 # Fichiers objets
 
 D_OBJS = .build
 OBJS = $(addprefix $(D_OBJS)/, $(S_SRCS:.cpp=.o))
+DEPS = $(OBJS:.o=.d)
 
 # Compilateur et flags
 
@@ -57,26 +58,30 @@ all: $(NAME)
 
 $(NAME): $(OBJS) 
 	@$(CXX) $(CXXFLAGS) -o $@ $(OBJS)
-	@echo "(YELLOW)(BOLD) Linking: $@ $(DEFAULT)"
+	@printf "%b\n" "$(YELLOW)$(BOLD)Linking: $@$(DEFAULT)"
 
 # Compilation des .cpp en .o
 
 $(D_OBJS)/%.o: $(D_SRCS)/%.cpp 
 	@mkdir -p $(@D)
-	@$(CXX) $(CXXFLAGS) $(IFLAGS) -c $< -o $@
-	@echo "(YELLOW)(BOLD) Compiling: $< $(DEFAULT)"
+	@$(CXX) $(CXXFLAGS) $(IFLAGS) -MMD -MP -c $< -o $@
+	@printf "%b\n" "$(YELLOW)$(BOLD)Compiling: $<$(DEFAULT)"
+
+# Recompile un .cpp quand un header qu'il inclut change
+
+-include $(DEPS)
 
 # Supprimer les fichiers objets
 
 clean: 
 	@$(RM) $(D_OBJS)
-	@echo "(CYAN)(BOLD) Object files removed successfully!$(DEFAULT)"
+	@printf "%b\n" "$(CYAN)$(BOLD)Object files removed successfully!$(DEFAULT)"
 
 # Supprimer les fichiers objets et l'exécutable
 
 fclean: clean
 	@$(RM) $(NAME)
-	@echo "(CYAN)(BOLD) Executable removed successfully!$(DEFAULT)"
+	@printf "%b\n" "$(CYAN)$(BOLD)Executable removed successfully!$(DEFAULT)"
 
 # Recompiler proprement
 

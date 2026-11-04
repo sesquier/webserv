@@ -23,7 +23,6 @@
 #include <iostream>
 #include <stdexcept>
 #include <sstream>
-#include <cerrno>
 #include <cstdio>
 
 static bool isValidUploadFilename(const std::string& filename)
@@ -115,8 +114,7 @@ void Server::setupListeningSocket()
 	int opt = 1;
 	if (setsockopt(_listenFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1)
 		throw std::runtime_error("setsockopt failed");
-	int flags = fcntl(_listenFd, F_GETFL, 0);
-	if (flags == -1 || fcntl(_listenFd, F_SETFL, flags | O_NONBLOCK) == -1)
+	if (fcntl(_listenFd, F_SETFL, O_NONBLOCK) == -1)
 	{
 		close(_listenFd);
 		_listenFd = -1;
@@ -155,66 +153,46 @@ void Server::run()
 	{
 		int count = epoll_wait(_epollFd, events, 10, 1000);
 
+		// A signal interrupts epoll_wait (Ctrl-Z then fg): the server must keep running.
 		if (count == -1)
-			throw std::runtime_error("epoll_wait failed");
-		
-		std::time_t now = std::time(NULL);
-		std::map<int, std::time_t>::iterator activityIt = _lastActivity.begin();
-		while (activityIt != _lastActivity.end())
-		{
-			int clientFd = activityIt->first;
-			std::time_t lastActivity = activityIt->second;
+			continue;
 
-			if (now - lastActivity >= 30)
-			{
-				++activityIt;
-				closeClient(clientFd);
-			}
-			else
-			{
-				++activityIt;
-			}
-		}
-		
 		for (int i = 0; i < count; i++)
 		{
 			int fd = events[i].data.fd;
 
 			if (fd == _listenFd)
 			{
-				while (true)
+				// One accept per event: epoll reports the socket again if more clients wait.
+				struct sockaddr_in clientAddr;
+				socklen_t clientLen = sizeof(clientAddr);
+
+				int clientFd = accept(_listenFd, reinterpret_cast<struct sockaddr*>(&clientAddr), &clientLen);
+		
+				if (clientFd == -1)
+					continue;
+				if (fcntl(clientFd, F_SETFL, O_NONBLOCK) == -1)
 				{
-					struct sockaddr_in clientAddr;
-					socklen_t clientLen = sizeof(clientAddr);
-
-					int clientFd = accept(_listenFd, reinterpret_cast<struct sockaddr*>(&clientAddr), &clientLen);
-			
-					if (clientFd == -1)
-						break;
-					int flags = fcntl(clientFd, F_GETFL, 0);
-					if (flags == -1 || fcntl(clientFd, F_SETFL, flags | O_NONBLOCK) == -1)
-					{
-						close(clientFd);
-						continue;
-					}
-
-					struct epoll_event clientEvent;
-					std::memset(&clientEvent, 0, sizeof(clientEvent));
-					clientEvent.events = EPOLLIN | EPOLLRDHUP;
-					clientEvent.data.fd = clientFd;
-
-					if (epoll_ctl(_epollFd, EPOLL_CTL_ADD, clientFd, &clientEvent) == -1)
-					{
-						close(clientFd);
-						continue ;
-					}
-
-					_clients[clientFd] = "";
-					_clientStates[clientFd] = READING;
-					_lastActivity[clientFd] = std::time(NULL);
-
-					std::cout << "Client connected: fd = " << clientFd << std::endl;
+					close(clientFd);
+					continue;
 				}
+
+				struct epoll_event clientEvent;
+				std::memset(&clientEvent, 0, sizeof(clientEvent));
+				clientEvent.events = EPOLLIN | EPOLLRDHUP;
+				clientEvent.data.fd = clientFd;
+
+				if (epoll_ctl(_epollFd, EPOLL_CTL_ADD, clientFd, &clientEvent) == -1)
+				{
+					close(clientFd);
+					continue ;
+				}
+
+				_clients[clientFd] = "";
+				_clientStates[clientFd] = READING;
+				_lastActivity[clientFd] = std::time(NULL);
+
+				std::cout << "Client connected: fd = " << clientFd << std::endl;
 			}
 			else
 			{
@@ -265,10 +243,6 @@ void Server::run()
 					}
 					else
 					{
-						// if (errno == EAGAIN || errno == EWOULDBLOCK)
-						// 	continue;
-						// if (errno == EINTR)
-						// 	continue ;
 						closeClient(fd);
 						continue ;
 					}
@@ -307,8 +281,6 @@ void Server::run()
 					}
 					if (parseStatus == Request::BODY_TOO_LARGE)
 					{
-						std::cerr << "DEBUG parseStatus = " << parseStatus << std::endl;
-						std::cerr << "DEBUG request = [" << _clients[fd] << "]" << std::endl;
 						try
 						{
 							queueResponse(fd, buildResponse(413, "Content Too Large", "413 Content Too Large\n"));
@@ -398,21 +370,20 @@ void Server::run()
 								// Le répertoire public est temporairement fixé à ./www.
 								std::string filePath = "./www" + target;
 
-								int fileFd = open(filePath.c_str(), O_RDONLY);
+								// stat avant open : ouvrir un FIFO bloquerait tout le serveur.
+								struct stat fileInfo;
 
-								if (fileFd == -1)
+								if (stat(filePath.c_str(), &fileInfo) == -1 || !S_ISREG(fileInfo.st_mode))
 								{
 									response = buildResponse(404, "Not Found", "404 Not Found\n");
 								}
 								else
 								{
-									struct stat fileInfo;
+									int fileFd = open(filePath.c_str(), O_RDONLY);
 
-									if (fstat(fileFd, &fileInfo) == -1 || !S_ISREG(fileInfo.st_mode))
+									if (fileFd == -1)
 									{
-										close(fileFd);
-
-										response = buildResponse(404, "Not Found", "404 Not Found\n");
+										response = buildResponse(403, "Forbidden", "403 Forbidden\n");
 									}
 									else
 									{
@@ -435,7 +406,7 @@ void Server::run()
 											}
 											else
 											{
-												// Pas de consultation d'errno après read().
+												// Erreur de lecture du fichier.
 												readError = true;
 												break;
 											}
@@ -535,68 +506,6 @@ void Server::run()
         				}
     				}
 
-
-					// else if (request.getMethod() == "POST")
-					// {
-					// 	std::string target = request.getTarget();
-
-					// 	//retirer query string
-					// 	std::string::size_type queryPos = target.find('?');
-
-					// 	if (queryPos != std::string::npos)
-					// 		target.erase(queryPos);
-						
-					// 	//cette premiere version accepte iniquement /upload/nom_fichier.
-					// 	const std::string prefix = "/upload/";
-
-					// 	if (target.compare(0, prefix.size(), prefix) != 0)
-					// 		response = buildResponse(404, "Not Found", "404 Not Found\n");
-					// 	else if (!request.hasContentLength())
-					// 		response = buildResponse(411, "Length Required", "411 Length Required\n");
-					// 	else
-					// 	{
-					// 		std::string filename = target.substr(prefix.size());
-							
-					// 		if (!isValidUploadFilename(filename))
-					// 			response = buildResponse(400, "Bad Request", "400 Bad Request\n");
-					// 		else
-					// 		{
-					// 			std::string filePath = "./www/uploads/" + filename;
-
-					// 			int fileFd = open(filePath.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0644);
-
-					// 			if (fileFd == -1)
-					// 				response = buildResponse(500, "Internal Server Error", "500 Internal Server Error\n");
-					// 			else
-					// 			{
-					// 				const std::string& body = request.getBody();
-					// 				std::string::size_type offset = 0;
-					// 				bool writeError = false;
-
-					// 				while (offset < body.size())
-					// 				{
-					// 					ssize_t bytesWritten = write(fileFd, body.data() + offset, body.size() - offset);
-
-					// 					if (bytesWritten <= 0)
-					// 					{
-					// 						writeError = true;
-					// 						break;
-					// 					}
-
-					// 					offset += static_cast<std::string::size_type>(bytesWritten);
-					// 				}
-					// 				close(fileFd);
-
-					// 				if (writeError)
-					// 					response = buildResponse(500, "Internal Server Error", "500 Internal Server Error\n");
-					// 				else
-					// 					response = buildResponse(201, "Created", "201 Created\n");
-
-					// 			}
-					// 		}	
-					// 	}
-
-					// }
 					else if (request.getMethod() == "DELETE")
 					{
 						std::string target = request.getTarget();
@@ -654,6 +563,25 @@ void Server::run()
 						closeClient(fd);
 					}		
 				}
+			}
+		}
+
+		// After the events: closing a client here cannot affect the events still to handle.
+		std::time_t now = std::time(NULL);
+		std::map<int, std::time_t>::iterator activityIt = _lastActivity.begin();
+		while (activityIt != _lastActivity.end())
+		{
+			int clientFd = activityIt->first;
+			std::time_t lastActivity = activityIt->second;
+
+			if (now - lastActivity >= 30)
+			{
+				++activityIt;
+				closeClient(clientFd);
+			}
+			else
+			{
+				++activityIt;
 			}
 		}
 	}
@@ -726,8 +654,7 @@ void Server::enableWriteEvent(int clientFd)
 	struct epoll_event event;
 	std::memset(&event, 0, sizeof(event));
 
-	event.events = EPOLLOUT
-	;
+	event.events = EPOLLOUT;
 	event.data.fd = clientFd;
 
 	if (epoll_ctl(_epollFd, EPOLL_CTL_MOD, clientFd, &event) == -1)
@@ -767,14 +694,6 @@ void Server::handleClientWrite(int clientFd)
         if (sentIt->second == response.size())
             closeClient(clientFd);
     }
-	// else if (bytesSent == -1)
-	// {
-	// 	// if (errno == EAGAIN || errno == EWOULDBLOCK)
-	// 	// 	return ;
-	// 	// if (errno == EINTR)
-	// 	// 	return ;
-	// 	closeClient(clientFd);
-	// }
 	else
 	{
 		closeClient(clientFd);

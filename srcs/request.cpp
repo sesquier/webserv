@@ -48,9 +48,12 @@ Request::ParseStatus Request::parse(const std::string& raw)
         raw.find("\r\n\r\n");
     std::string::size_type separatorSize = 4;
 
-    if (headersEnd == std::string::npos)
+    // Keep the first separator: the body may contain the other one.
+    std::string::size_type lfHeadersEnd = raw.find("\n\n");
+
+    if (lfHeadersEnd < headersEnd)
     {
-        headersEnd = raw.find("\n\n");
+        headersEnd = lfHeadersEnd;
         separatorSize = 2;
     }
 
@@ -67,9 +70,7 @@ Request::ParseStatus Request::parse(const std::string& raw)
     // Locate the end of the request line.
     std::string::size_type lineEnd = headers.find('\n');
 
-    if (lineEnd == std::string::npos)
-        return (INVALID);
-
+    // No '\n' means a request without any header, which HTTP/1.0 allows.
     std::string line = headers.substr(0, lineEnd);
 
     // Remove a trailing carriage return if present.
@@ -100,7 +101,10 @@ Request::ParseStatus Request::parse(const std::string& raw)
 
     bool hasContentLength = false;
 
-    std::string::size_type pos = lineEnd + 1;
+    std::string::size_type pos = headers.size();
+
+    if (lineEnd != std::string::npos)
+        pos = lineEnd + 1;
 
     while (pos < headers.size())
     {
