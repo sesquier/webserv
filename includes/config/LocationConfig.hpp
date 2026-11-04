@@ -31,11 +31,13 @@ struct LocationConfig
 	LocationConfig();
 
 	bool	isMethodAllowed(const std::string& method) const;
+	bool	matchesPath(const std::string& requestPath) const;
 };
 
-// Not implemented yet.
-// Path on disk for a request path (without the query string).
-// Returns an empty string if the path contains a ".." segment.
+// Path on disk for a request path: without the query string and percent-decoded,
+// because "%2e%2e" must already be ".." when it is checked here.
+// Returns an empty string if the path must not be served: it contains a ".."
+// segment, does not start with '/' or does not belong to this location.
 std::string resolvePath(const LocationConfig& location, const std::string& path);
 
 #endif

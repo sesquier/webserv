@@ -1,6 +1,7 @@
 // Standalone driver for the config module: reads a configuration file
 // and prints what the module produced. Not part of the webserv binary.
 // Usage: config_test [--tokens] [configuration file]
+//        config_test --route <configuration file> <request path>
 
 #include "config/Config.hpp"
 #include "config/ConfigFile.hpp"
@@ -30,68 +31,32 @@ static void printTokens(const std::vector<Token>& tokens)
 	}
 }
 
-static void printErrorPages(const std::map<int, std::string>& errorPages)
+// Shows which location and which file the first server picks for a path.
+static int printRoute(const std::string& file, const std::string& path)
 {
-	for (std::map<int, std::string>::const_iterator it = errorPages.begin();
-		it != errorPages.end(); ++it)
-		std::cout << it->first << "->" << it->second << " ";
-}
-
-static void printBodySize(size_t size)
-{
-	if (size == BODY_SIZE_UNSET)
-		std::cout << "unset";
-	else
-		std::cout << size;
-}
-
-// Temporary summary until the real dump function exists.
-static void printServers(const std::vector<ServerConfig>& servers)
-{
-	for (size_t i = 0; i < servers.size(); i++)
+	try
 	{
-		std::cout << "server #" << i + 1
-				  << "  root=" << servers[i].root
-				  << "  index=" << servers[i].index
-				  << "  maxBody=";
-		printBodySize(servers[i].maxBodySize);
-		std::cout << "  errorPages=";
-		printErrorPages(servers[i].errorPages);
-		std::cout << "  listens=";
-		for (size_t l = 0; l < servers[i].listens.size(); l++)
-			std::cout << servers[i].listens[l].host << ":" << servers[i].listens[l].port << " ";
-		std::cout << std::endl;
-		for (size_t j = 0; j < servers[i].locations.size(); j++)
-		{
-			const LocationConfig& location = servers[i].locations[j];
+		std::vector<ServerConfig>	servers = loadConfig(file);
+		const LocationConfig&		location = servers[0].findLocation(path);
+		std::string					disk = resolvePath(location, path);
 
-			std::cout << "    location " << location.path
-					  << "  root=" << location.root
-					  << "  hasOwnRoot=" << location.hasOwnRoot
-					  << "  index=" << location.index
-					  << "  autoindex=" << location.autoindex
-					  << "  methods=";
-			for (size_t k = 0; k < location.methods.size(); k++)
-				std::cout << location.methods[k] << " ";
-			std::cout << " uploadStore=" << location.uploadStore
-					  << "  return=" << location.redirectCode << " " << location.redirectUrl
-					  << "  cgi=";
-			for (std::map<std::string, std::string>::const_iterator it = location.cgi.begin();
-				it != location.cgi.end(); ++it)
-				std::cout << it->first << "->" << it->second << " ";
-			std::cout << " maxBody=";
-			printBodySize(location.maxBodySize);
-			std::cout << "  errorPages=";
-			printErrorPages(location.errorPages);
-			std::cout << std::endl;
-		}
+		std::cout << location.path << " " << (disk.empty() ? "REFUSED" : disk) << std::endl;
 	}
+	catch (const ConfigError& e)
+	{
+		std::cerr << "webserv: config error: " << e.what() << std::endl;
+		return 1;
+	}
+	return 0;
 }
 
 int main(int argc, char** argv)
 {
 	int		arg = 1;
 	bool	showTokens = false;
+
+	if (argc == 4 && std::string(argv[1]) == "--route")
+		return printRoute(argv[2], argv[3]);
 
 	if (arg < argc && std::string(argv[arg]) == "--tokens")
 	{
@@ -113,7 +78,7 @@ int main(int argc, char** argv)
 		}
 		std::vector<ServerConfig> servers = loadConfig(path);
 		if (!showTokens)
-			printServers(servers);
+			dumpConfig(servers, std::cout);
 	}
 	catch (const ConfigError& e)
 	{

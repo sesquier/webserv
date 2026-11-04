@@ -10,3 +10,16 @@ ServerConfig::ServerConfig()
 	: maxBodySize(BODY_SIZE_UNSET)
 {
 }
+
+const LocationConfig& ServerConfig::findLocation(const std::string& path) const
+{
+	const LocationConfig* best = NULL;
+
+	for (size_t i = 0; i < locations.size(); i++)
+	{
+		if (locations[i].matchesPath(path)
+			&& (best == NULL || locations[i].path.size() > best->path.size()))
+			best = &locations[i];
+	}
+	return *best;
+}

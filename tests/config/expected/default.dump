@@ -1,0 +1,55 @@
+server #1
+    listen: 127.0.0.1:8080
+    root: ./www/site1
+    index: index.html
+    client_max_body_size: 1048576
+    error_page: 404 -> ./www/site1/errors/404.html
+    location /
+        root: ./www/site1 (inherited)
+        index: index.html
+        client_max_body_size: 1048576
+        methods: GET
+        autoindex: off
+        error_page: 404 -> ./www/site1/errors/404.html
+    location /files
+        root: ./www/site1/files (own)
+        index: index.html
+        client_max_body_size: 1048576
+        methods: GET
+        autoindex: on
+        error_page: 404 -> ./www/site1/errors/404.html
+    location /upload
+        root: ./www/site1/uploads (own)
+        index: index.html
+        client_max_body_size: 10485760
+        methods: GET POST DELETE
+        autoindex: off
+        upload_store: ./www/site1/uploads
+        error_page: 404 -> ./www/site1/errors/404.html
+    location /cgi-bin
+        root: ./www/site1/cgi-bin (own)
+        index: index.html
+        client_max_body_size: 1048576
+        methods: GET POST
+        autoindex: off
+        cgi: .py -> /usr/bin/python3
+        error_page: 404 -> ./www/site1/errors/404.html
+    location /old
+        root: ./www/site1 (inherited)
+        index: index.html
+        client_max_body_size: 1048576
+        methods: GET
+        autoindex: off
+        return: 301 /
+        error_page: 404 -> ./www/site1/errors/404.html
+server #2
+    listen: 0.0.0.0:8081
+    root: ./www/site2
+    index: index.html
+    client_max_body_size: 1048576
+    location /
+        root: ./www/site2 (inherited)
+        index: index.html
+        client_max_body_size: 1048576
+        methods: GET
+        autoindex: off
