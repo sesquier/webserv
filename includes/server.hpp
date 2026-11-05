@@ -15,19 +15,24 @@
 
 #include <map>
 #include <string>
+#include <vector>
 #include <ctime>
+#include "config/ServerConfig.hpp"
 
 class Server
 {
 	public:
-		Server();
+		explicit Server(const std::vector<ServerConfig>& configs);
 		~Server();
 
 		void run();
 
 	private:
 		int _epollFd;
-		int _listenFd;
+		const std::vector<ServerConfig>& _configs;
+
+		std::map<int, const ServerConfig*> _listeners;		// listening socket -> its server
+		std::map<int, const ServerConfig*> _clientServers;	// client socket -> the server it reached
 
 		enum ClientState
 		{
@@ -45,7 +50,8 @@ class Server
 		Server(const Server& other);
 		Server& operator=(const Server& rhs);
 
-		void setupListeningSocket();
+		void setupListeningSockets();
+		void addListener(const ListenAddress& address, const ServerConfig& config);
 		void closeClient(int clientFD);
 
 		std::string buildResponse(int statusCode, const std::string& reason, const std::string& body, const std::string&  contentType = "text/plain") const;
