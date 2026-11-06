@@ -12,11 +12,11 @@ CONFIG = """
 server {
     listen 127.0.0.1:8180;
     listen 127.0.0.1:8181;
-    root ./www/first;
+    root ./www/site1;
 }
 server {
     listen 8182;
-    root ./www/second;
+    root ./www/site2;
 }
 """
 
@@ -59,7 +59,7 @@ def test_listeners_and_servers():
 		time.sleep(0.2)
 		log.seek(0)
 		roots = [line for line in log.read().splitlines() if "server root" in line]
-		expected = ["./www/first", "./www/first", "./www/second"]
+		expected = ["./www/site1", "./www/site1", "./www/site2"]
 		report("Each client is attached to the server of its port",
 			len(roots) == 3 and all(root in line for root, line in zip(expected, roots)))
 		conflict = run_and_exit([path])

@@ -56,14 +56,16 @@ class Server
 		void addListener(const ListenAddress& address, const ServerConfig& config);
 		void closeClient(int clientFD);
 
-		std::string buildResponse(int statusCode, const std::string& reason, const std::string& body, const std::string&  contentType = "text/plain") const;
+		std::string buildResponse(int statusCode, const std::string& reason, const std::string& body,
+			const std::string& contentType = "text/plain", const std::string& extraHeaders = "") const;
 		// std::string buildError() const;
 		void queueResponse(int clientFd, const std::string& response);
 
-		std::string handleRequest(const Request& request) const;
-		std::string handleGet(const Request& request) const;
-		std::string handlePost(const Request& request) const;
-		std::string handleDelete(const Request& request) const;
+		std::string handleRequest(const Request& request, const ServerConfig& server) const;
+		std::string handleGet(const std::string& path, const LocationConfig& location) const;
+		std::string serveFile(const std::string& filePath) const;
+		std::string handlePost(const Request& request, const std::string& path, const LocationConfig& location) const;
+		std::string handleDelete(const std::string& path, const LocationConfig& location) const;
 
 		void enableWriteEvent(int clientFd);
 		void handleClientWrite(int clientfd);

@@ -8,7 +8,7 @@ import sys
 import time
 
 PORT = 8080
-FIFO = "www/test_fifo"
+FIFO = "www/site1/test_fifo"
 results = []
 
 
@@ -38,7 +38,7 @@ def test_requests():
 	body = b"a\r\n\r\nb"
 	head = b"POST /upload/test_robustness.bin HTTP/1.1\nHost: x\nContent-Length: %d\n\n" % len(body)
 	report("LF headers with CRLFCRLF in the body", has_status(request(head + body), 201))
-	path = "www/uploads/test_robustness.bin"
+	path = "www/site1/uploads/test_robustness.bin"
 	with open(path, "rb") as saved:
 		report("Body saved without alteration", saved.read() == body)
 	os.unlink(path)
