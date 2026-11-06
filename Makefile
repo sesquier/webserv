@@ -17,7 +17,7 @@ NAME = webserv
 # Fichiers source
 
 D_SRCS = ./srcs
-S_SRCS = main.cpp server.cpp request.cpp \
+S_SRCS = main.cpp server.cpp handlers.cpp request.cpp \
 	config/Token.cpp config/ConfigError.cpp config/ConfigFile.cpp \
 	config/Tokenizer.cpp config/LocationConfig.cpp config/ServerConfig.cpp \
 	config/ConfigParser.cpp config/Config.cpp config/ConfigDump.cpp
