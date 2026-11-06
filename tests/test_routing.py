@@ -57,6 +57,19 @@ def main():
 		check("DELETE not allowed on /files", "DELETE", "/files/exemple.txt", 405)
 		check("Unknown method", "PUT", "/", 501)
 		check("Missing page", "GET", "/page-inexistante.html", 404)
+		check("Directory without its final /", "GET", "/files", 301, header="Location: /files/")
+		check("Directory listing (autoindex on)", "GET", "/files/", 200, content=b'<a href="notes.txt">')
+		check("Listing shows every file", "GET", "/files/", 200, content=b'<a href="exemple.txt">')
+		check("Directory with index serves it", "GET", "/", 200, content=b"<h1>Site 1</h1>")
+		check("Directory without index nor autoindex", "GET", "/uploads/", 403)
+		trap = "www/site1/files/<b>trap.txt"
+		open(trap, "w").close()
+		try:
+			check("File names are escaped in the listing", "GET", "/files/", 200, content=b"&lt;b&gt;trap.txt")
+			status, _, page = request("GET", "/files/")
+			report("No raw HTML from a file name", b"<b>trap" not in page)
+		finally:
+			os.unlink(trap)
 		check("Traversal refused", "GET", "/../../etc/passwd", 403)
 		check("Upload into upload_store", "POST", "/upload/test_routing.txt", 201, body=b"bonjour")
 		report("Uploaded file is on disk", os.path.exists(UPLOADED))

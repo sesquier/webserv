@@ -63,6 +63,8 @@ class Server
 		// handlers.cpp: building the response of a parsed request
 		std::string handleRequest(const Request& request, const ServerConfig& server) const;
 		std::string handleGet(const std::string& path, const LocationConfig& location) const;
+		std::string handleDirectory(const std::string& path, const std::string& dirPath,
+			const LocationConfig& location) const;
 		std::string serveFile(const std::string& filePath) const;
 		std::string handlePost(const Request& request, const std::string& path, const LocationConfig& location) const;
 		std::string handleDelete(const std::string& path, const LocationConfig& location) const;

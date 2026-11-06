@@ -4,9 +4,11 @@
 #include "server.hpp"
 #include "request.hpp"
 #include <sys/stat.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sstream>
+#include <set>
 
 static bool isValidUploadFilename(const std::string& filename)
 {
@@ -153,6 +155,69 @@ static bool readWholeFile(const std::string& filePath, std::string& content)
 	return (bytesRead == 0);
 }
 
+// A file name is shown inside the HTML page: "<", ">", "&" and quotes must not
+// be read as HTML, or a file named "<script>..." would run in the browser.
+static std::string escapeHtml(const std::string& text)
+{
+	std::string escaped;
+
+	for (std::string::size_type i = 0; i < text.size(); i++)
+	{
+		if (text[i] == '<')
+			escaped += "&lt;";
+		else if (text[i] == '>')
+			escaped += "&gt;";
+		else if (text[i] == '&')
+			escaped += "&amp;";
+		else if (text[i] == '"')
+			escaped += "&quot;";
+		else
+			escaped += text[i];
+	}
+	return (escaped);
+}
+
+// Names of the directory, sorted; a sub-directory ends with '/'.
+// Returns false if the directory cannot be opened.
+static bool readDirectory(const std::string& dirPath, std::set<std::string>& names)
+{
+	DIR* dir = opendir(dirPath.c_str());
+
+	if (dir == NULL)
+		return (false);
+
+	struct dirent* entry;
+
+	while ((entry = readdir(dir)) != NULL)
+	{
+		std::string	name = entry->d_name;
+		struct stat	info;
+
+		if (name == "." || name == "..")
+			continue;
+		if (stat((dirPath + name).c_str(), &info) == 0 && S_ISDIR(info.st_mode))
+			name += "/";
+		names.insert(name);
+	}
+	closedir(dir);
+	return (true);
+}
+
+// The autoindex page: one link per entry of the directory.
+static std::string directoryListing(const std::string& path, const std::set<std::string>& names)
+{
+	std::string title = "Index of " + escapeHtml(path);
+	std::string html = "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"UTF-8\">\n<title>"
+		+ title + "</title>\n</head>\n<body>\n<h1>" + title + "</h1>\n<ul>\n";
+
+	if (path != "/")
+		html += "<li><a href=\"../\">../</a></li>\n";
+	for (std::set<std::string>::const_iterator it = names.begin(); it != names.end(); ++it)
+		html += "<li><a href=\"" + escapeHtml(*it) + "\">" + escapeHtml(*it) + "</a></li>\n";
+	html += "</ul>\n</body>\n</html>\n";
+	return (html);
+}
+
 // Applies the rules shared by every method, then chooses the handler.
 // The order matters: unknown method, redirection, then allowed methods.
 std::string Server::handleRequest(const Request& request, const ServerConfig& server) const
@@ -180,7 +245,6 @@ std::string Server::handleRequest(const Request& request, const ServerConfig& se
 	return (handleDelete(path, location));
 }
 
-// A directory is served through its index file. Listing (autoindex) comes later.
 std::string Server::handleGet(const std::string& path, const LocationConfig& location) const
 {
 	std::string filePath = resolvePath(location, path);
@@ -191,12 +255,34 @@ std::string Server::handleGet(const std::string& path, const LocationConfig& loc
 	struct stat info;
 
 	if (stat(filePath.c_str(), &info) == 0 && S_ISDIR(info.st_mode))
-	{
-		if (filePath[filePath.size() - 1] != '/')
-			filePath += "/";
-		filePath += location.index;
-	}
+		return (handleDirectory(path, filePath, location));
 	return (serveFile(filePath));
+}
+
+// In order: add the missing '/', serve the index file, list the content
+// (autoindex on), or refuse (autoindex off).
+std::string Server::handleDirectory(const std::string& path, const std::string& dirPath,
+	const LocationConfig& location) const
+{
+	// Without the final '/', the browser would resolve the links of the page
+	// from the parent directory: "/files" + "notes.txt" gives "/notes.txt".
+	if (path[path.size() - 1] != '/')
+		return (buildResponse(301, "Moved Permanently", "", "text/plain",
+			"Location: " + path + "/\r\n"));
+
+	std::string	indexPath = dirPath + location.index;
+	struct stat	info;
+
+	if (stat(indexPath.c_str(), &info) == 0 && S_ISREG(info.st_mode))
+		return (serveFile(indexPath));
+	if (!location.autoindex)
+		return (buildResponse(403, "Forbidden", "403 Forbidden\n"));
+
+	std::set<std::string> names;
+
+	if (!readDirectory(dirPath, names))
+		return (buildResponse(403, "Forbidden", "403 Forbidden\n"));
+	return (buildResponse(200, "OK", directoryListing(path, names), "text/html"));
 }
 
 // stat before open: opening a FIFO would block the whole server.
