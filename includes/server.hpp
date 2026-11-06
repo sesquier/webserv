@@ -19,6 +19,8 @@
 #include <ctime>
 #include "config/ServerConfig.hpp"
 
+class Request;
+
 class Server
 {
 	public:
@@ -57,6 +59,11 @@ class Server
 		std::string buildResponse(int statusCode, const std::string& reason, const std::string& body, const std::string&  contentType = "text/plain") const;
 		// std::string buildError() const;
 		void queueResponse(int clientFd, const std::string& response);
+
+		std::string handleRequest(const Request& request) const;
+		std::string handleGet(const Request& request) const;
+		std::string handlePost(const Request& request) const;
+		std::string handleDelete(const Request& request) const;
 
 		void enableWriteEvent(int clientFd);
 		void handleClientWrite(int clientfd);

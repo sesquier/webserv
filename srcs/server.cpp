@@ -351,246 +351,7 @@ void Server::run()
               				<< request.getVersion()
               				<< " (server root: " << _clientServers[fd]->root << ")" << std::endl;
 
-					std::string response;
-
-					if (request.getMethod() == "GET")
-					{	
-						std::string target = request.getTarget();
-
-						// Retirer la query string, par exemple ?page=2.
-						std::string::size_type queryPos = target.find('?');
-
-						if (queryPos != std::string::npos)
-						target.erase(queryPos);
-
-						// Le chemin d'une cible HTTP doit commencer par '/'.
-						if (target.empty() || target[0] != '/')
-						{
-							response = buildResponse(400, "Bad Request", "400 Bad Request\n");
-						}
-						else
-						{
-							// Vérifier les segments du chemin pour empêcher
-							// les tentatives de remontée dans les répertoires.
-							bool forbidden = false;
-							std::string::size_type pos = 0;
-
-							while (pos < target.size())
-							{
-								std::string::size_type end = target.find('/', pos);
-
-								if (end == std::string::npos)
-									end = target.size();
-
-								std::string segment = target.substr(pos, end - pos);
-
-								if (segment == "..")
-								{
-									forbidden = true;
-									break;
-								}
-
-								if (end == target.size())
-									break;
-
-								pos = end + 1;
-							}
-
-							if (forbidden)
-							{
-								response = buildResponse(403, "Forbidden", "403 Forbidden\n");
-							}
-							else
-							{
-								// Pour '/', servir la page d'accueil.
-								if (target == "/")
-									target = "/index.html";
-
-								// Le répertoire public est temporairement fixé à ./www.
-								std::string filePath = "./www" + target;
-
-								// stat avant open : ouvrir un FIFO bloquerait tout le serveur.
-								struct stat fileInfo;
-
-								if (stat(filePath.c_str(), &fileInfo) == -1 || !S_ISREG(fileInfo.st_mode))
-								{
-									response = buildResponse(404, "Not Found", "404 Not Found\n");
-								}
-								else
-								{
-									int fileFd = open(filePath.c_str(), O_RDONLY);
-
-									if (fileFd == -1)
-									{
-										response = buildResponse(403, "Forbidden", "403 Forbidden\n");
-									}
-									else
-									{
-										std::string body;
-										char buffer[4096];
-										bool readError = false;
-
-										while (true)
-										{
-											ssize_t bytesRead = read(fileFd, buffer, sizeof(buffer));
-
-											if (bytesRead > 0)
-											{
-												body.append(buffer, bytesRead);
-											}
-											else if (bytesRead == 0)
-											{
-												// Fin du fichier.
-												break;
-											}
-											else
-											{
-												// Erreur de lecture du fichier.
-												readError = true;
-												break;
-											}
-										}
-
-										close(fileFd);
-
-										if (readError)
-										{
-											response = buildResponse(500, "Internal Server Error", "500 Internal Server Error\n");
-										}
-										else
-										{
-											// Déterminer le type de contenu grâce à l'extension.
-											std::string contentType = "application/octet-stream";
-
-											std::string::size_type dotPos =
-											target.find_last_of('.');
-
-											if (dotPos != std::string::npos)
-											{
-												std::string extension = target.substr(dotPos);
-
-												if (extension == ".html" || extension == ".htm")
-													contentType = "text/html";
-												else if (extension == ".css")
-													contentType = "text/css";
-												else if (extension == ".js")
-													contentType = "application/javascript";
-												else if (extension == ".txt")
-													contentType = "text/plain";
-												else if (extension == ".json")
-													contentType = "application/json";
-												else if (extension == ".png")
-													contentType = "image/png";
-												else if (extension == ".jpg" || extension == ".jpeg")
-													contentType = "image/jpeg";
-												else if (extension == ".gif")
-													contentType = "image/gif";
-												else if (extension == ".svg")
-													contentType = "image/svg+xml";
-											}
-
-											response = buildResponse(200, "OK", body, contentType);
-										}
-									}
-								}
-							}
-						}
-					}
-					else if (request.getMethod() == "POST")
-					{
-    					std::string target = request.getTarget();
-
-    					std::string::size_type queryPos = target.find('?');
-
-    					if (queryPos != std::string::npos)
-        					target.erase(queryPos);
-
-    					const std::string prefix = "/upload/";
-
-    					if (target.compare(0, prefix.size(), prefix) != 0)
-    					{
-        					response = buildResponse(404, "Not Found", "404 Not Found\n");
-						}
-    					else if (!request.hasContentLength())
-    					{
-        					response = buildResponse(411, "Length Required", "411 Length Required\n");
-    					}
-						else
-    					{
-        					std::string filename = target.substr(prefix.size());
-
-        					if (!isValidUploadFilename(filename))
-        					{
-            					response = buildResponse(400, "Bad Request", "400 Bad Request\n");
-        					}
-        					else
-        					{
-            					std::string filePath = "./www/uploads/" + filename;
-
-            					int status = saveUploadedFile(filePath, request.getBody());
-		
-								if (status == 201)
-            					{
-                					response = buildResponse(201, "Created", "201 Created\n");
-            					}
-            					else if (status == 409)
-            					{
-                					response = buildResponse(409, "Conflict", "409 Conflict\n");
-            					}
-            					else
-            					{
-                					response = buildResponse(500, "Internal Server Error", "500 Internal Server Error\n");
-								}	
-            				}
-        				}
-    				}
-
-					else if (request.getMethod() == "DELETE")
-					{
-						std::string target = request.getTarget();
-						std::string::size_type queryPos = target.find('?');
-						
-						if (queryPos != std::string::npos)
-							target.erase(queryPos);
-
-						const std::string prefix = "/uploads/";
-
-						if (target.compare(0, prefix.size(), prefix) != 0)
-							response = buildResponse(404, "Not Found", "404 Not Found\n");
-						else
-						{
-							std::string filename = target.substr(prefix.size());
-
-							if (!isValidUploadFilename(filename))
-								response = buildResponse(400, "Bad Request", "400 Bad Request\n");
-							else
-							{
-								std::string filePath = "./www/uploads/" + filename;
-								struct stat fileInfo;
-
-								if (stat(filePath.c_str(), &fileInfo) || !S_ISREG(fileInfo.st_mode))
-									response = buildResponse(404, "Not Found", "404 Not Found\n");
-								else if (unlink(filePath.c_str()) == -1)
-									response = buildResponse(500, "Internal Server Error", "500 Internal Server Error\n");
-								else
-									response = buildResponse(204, "No Content", "");
-
-
-
-							}
-						}
-					}
-					else
-						response = buildResponse(501, "Not Implemented", "501 Not Implemented\n");
-
-					// if (request.getMethod() == "GET")
-					// {
-					// 	response = buildResponse(200, "OK", "Hello World!\n");
-					// }
-					// else
-					// {
-					// 	response = buildResponse(501, "Not Implemented", "501 Not Implemented\n");
-					// }
+					std::string response = handleRequest(request);
 
 					try
 					{
@@ -624,6 +385,259 @@ void Server::run()
 			}
 		}
 	}
+}
+
+// Chooses the handler of the request method.
+std::string Server::handleRequest(const Request& request) const
+{
+	if (request.getMethod() == "GET")
+		return (handleGet(request));
+	if (request.getMethod() == "POST")
+		return (handlePost(request));
+	if (request.getMethod() == "DELETE")
+		return (handleDelete(request));
+	return (buildResponse(501, "Not Implemented", "501 Not Implemented\n"));
+}
+
+std::string Server::handleGet(const Request& request) const
+{
+	std::string response;
+
+	std::string target = request.getTarget();
+
+	// Retirer la query string, par exemple ?page=2.
+	std::string::size_type queryPos = target.find('?');
+
+	if (queryPos != std::string::npos)
+	target.erase(queryPos);
+
+	// Le chemin d'une cible HTTP doit commencer par '/'.
+	if (target.empty() || target[0] != '/')
+	{
+		response = buildResponse(400, "Bad Request", "400 Bad Request\n");
+	}
+	else
+	{
+		// Vérifier les segments du chemin pour empêcher
+		// les tentatives de remontée dans les répertoires.
+		bool forbidden = false;
+		std::string::size_type pos = 0;
+
+		while (pos < target.size())
+		{
+			std::string::size_type end = target.find('/', pos);
+
+			if (end == std::string::npos)
+				end = target.size();
+
+			std::string segment = target.substr(pos, end - pos);
+
+			if (segment == "..")
+			{
+				forbidden = true;
+				break;
+			}
+
+			if (end == target.size())
+				break;
+
+			pos = end + 1;
+		}
+
+		if (forbidden)
+		{
+			response = buildResponse(403, "Forbidden", "403 Forbidden\n");
+		}
+		else
+		{
+			// Pour '/', servir la page d'accueil.
+			if (target == "/")
+				target = "/index.html";
+
+			// Le répertoire public est temporairement fixé à ./www.
+			std::string filePath = "./www" + target;
+
+			// stat avant open : ouvrir un FIFO bloquerait tout le serveur.
+			struct stat fileInfo;
+
+			if (stat(filePath.c_str(), &fileInfo) == -1 || !S_ISREG(fileInfo.st_mode))
+			{
+				response = buildResponse(404, "Not Found", "404 Not Found\n");
+			}
+			else
+			{
+				int fileFd = open(filePath.c_str(), O_RDONLY);
+
+				if (fileFd == -1)
+				{
+					response = buildResponse(403, "Forbidden", "403 Forbidden\n");
+				}
+				else
+				{
+					std::string body;
+					char buffer[4096];
+					bool readError = false;
+
+					while (true)
+					{
+						ssize_t bytesRead = read(fileFd, buffer, sizeof(buffer));
+
+						if (bytesRead > 0)
+						{
+							body.append(buffer, bytesRead);
+						}
+						else if (bytesRead == 0)
+						{
+							// Fin du fichier.
+							break;
+						}
+						else
+						{
+							// Erreur de lecture du fichier.
+							readError = true;
+							break;
+						}
+					}
+
+					close(fileFd);
+
+					if (readError)
+					{
+						response = buildResponse(500, "Internal Server Error", "500 Internal Server Error\n");
+					}
+					else
+					{
+						// Déterminer le type de contenu grâce à l'extension.
+						std::string contentType = "application/octet-stream";
+
+						std::string::size_type dotPos =
+						target.find_last_of('.');
+
+						if (dotPos != std::string::npos)
+						{
+							std::string extension = target.substr(dotPos);
+
+							if (extension == ".html" || extension == ".htm")
+								contentType = "text/html";
+							else if (extension == ".css")
+								contentType = "text/css";
+							else if (extension == ".js")
+								contentType = "application/javascript";
+							else if (extension == ".txt")
+								contentType = "text/plain";
+							else if (extension == ".json")
+								contentType = "application/json";
+							else if (extension == ".png")
+								contentType = "image/png";
+							else if (extension == ".jpg" || extension == ".jpeg")
+								contentType = "image/jpeg";
+							else if (extension == ".gif")
+								contentType = "image/gif";
+							else if (extension == ".svg")
+								contentType = "image/svg+xml";
+						}
+
+						response = buildResponse(200, "OK", body, contentType);
+					}
+				}
+			}
+		}
+	}
+
+	return (response);
+}
+
+std::string Server::handlePost(const Request& request) const
+{
+	std::string response;
+
+	std::string target = request.getTarget();
+
+	std::string::size_type queryPos = target.find('?');
+
+	if (queryPos != std::string::npos)
+		target.erase(queryPos);
+
+	const std::string prefix = "/upload/";
+
+	if (target.compare(0, prefix.size(), prefix) != 0)
+	{
+		response = buildResponse(404, "Not Found", "404 Not Found\n");
+	}
+	else if (!request.hasContentLength())
+	{
+		response = buildResponse(411, "Length Required", "411 Length Required\n");
+	}
+	else
+	{
+		std::string filename = target.substr(prefix.size());
+
+		if (!isValidUploadFilename(filename))
+		{
+			response = buildResponse(400, "Bad Request", "400 Bad Request\n");
+		}
+		else
+		{
+			std::string filePath = "./www/uploads/" + filename;
+
+			int status = saveUploadedFile(filePath, request.getBody());
+
+			if (status == 201)
+			{
+				response = buildResponse(201, "Created", "201 Created\n");
+			}
+			else if (status == 409)
+			{
+				response = buildResponse(409, "Conflict", "409 Conflict\n");
+			}
+			else
+			{
+				response = buildResponse(500, "Internal Server Error", "500 Internal Server Error\n");
+			}
+		}
+	}
+
+	return (response);
+}
+
+std::string Server::handleDelete(const Request& request) const
+{
+	std::string response;
+
+	std::string target = request.getTarget();
+	std::string::size_type queryPos = target.find('?');
+
+	if (queryPos != std::string::npos)
+		target.erase(queryPos);
+
+	const std::string prefix = "/uploads/";
+
+	if (target.compare(0, prefix.size(), prefix) != 0)
+		response = buildResponse(404, "Not Found", "404 Not Found\n");
+	else
+	{
+		std::string filename = target.substr(prefix.size());
+
+		if (!isValidUploadFilename(filename))
+			response = buildResponse(400, "Bad Request", "400 Bad Request\n");
+		else
+		{
+			std::string filePath = "./www/uploads/" + filename;
+			struct stat fileInfo;
+
+			if (stat(filePath.c_str(), &fileInfo) || !S_ISREG(fileInfo.st_mode))
+				response = buildResponse(404, "Not Found", "404 Not Found\n");
+			else if (unlink(filePath.c_str()) == -1)
+				response = buildResponse(500, "Internal Server Error", "500 Internal Server Error\n");
+			else
+				response = buildResponse(204, "No Content", "");
+
+
+
+		}
+	}
+
+	return (response);
 }
 
 void Server::closeClient(int clientFd)
