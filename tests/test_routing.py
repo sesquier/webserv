@@ -71,6 +71,19 @@ def main():
 		finally:
 			os.unlink(trap)
 		check("Traversal refused", "GET", "/../../etc/passwd", 403)
+		check("Encoded traversal refused", "GET", "/%2e%2e/%2E%2E/etc/passwd", 403)
+		check("Malformed escape", "GET", "/bad%zz.html", 400)
+		check("Truncated escape", "GET", "/bad%2", 400)
+		check("Escaped NUL byte", "GET", "/index.html%00.txt", 400)
+		check("Encoded letters", "GET", "/%63ontact.html", 200, content=b"Page de contact")
+		spaced = "www/site1/files/mon fichier#1.txt"
+		with open(spaced, "w") as created:
+			created.write("avec espace")
+		try:
+			check("File name with a space and '#'", "GET", "/files/mon%20fichier%231.txt", 200, content=b"avec espace")
+			check("Listing link is encoded", "GET", "/files/", 200, content=b'href="mon%20fichier%231.txt"')
+		finally:
+			os.unlink(spaced)
 		check("Upload into upload_store", "POST", "/upload/test_routing.txt", 201, body=b"bonjour")
 		report("Uploaded file is on disk", os.path.exists(UPLOADED))
 		check("Uploaded file can be read back", "GET", "/upload/test_routing.txt", 200, content=b"bonjour")

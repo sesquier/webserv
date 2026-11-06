@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <sstream>
 #include <set>
+#include <cctype>
 
 static bool isValidUploadFilename(const std::string& filename)
 {
@@ -79,6 +80,67 @@ static int saveUploadedFile(const std::string& filePath, const std::string& body
 static std::string requestPath(const std::string& target)
 {
 	return (target.substr(0, target.find('?')));
+}
+
+static int hexValue(char c)
+{
+	if (c >= '0' && c <= '9')
+		return (c - '0');
+	if (c >= 'a' && c <= 'f')
+		return (c - 'a' + 10);
+	if (c >= 'A' && c <= 'F')
+		return (c - 'A' + 10);
+	return (-1);
+}
+
+// "%20" -> ' ': a URL encodes every special character as '%' and two hex digits.
+// Returns false on a malformed '%' or on "%00", which would cut the path short
+// once it is given to a C function.
+static bool decodePath(const std::string& encoded, std::string& decoded)
+{
+	for (std::string::size_type i = 0; i < encoded.size(); i++)
+	{
+		if (encoded[i] != '%')
+		{
+			decoded += encoded[i];
+			continue;
+		}
+		// Two hex digits must follow the '%'.
+		if (i + 2 >= encoded.size())
+			return (false);
+
+		int high = hexValue(encoded[i + 1]);
+		int low = hexValue(encoded[i + 2]);
+
+		if (high < 0 || low < 0 || (high == 0 && low == 0))
+			return (false);
+		decoded += static_cast<char>(high * 16 + low);
+		i += 2;
+	}
+	return (true);
+}
+
+// The reverse, for the links of the autoindex page: "a#b.txt" -> "a%23b.txt".
+// Without it, '#' or '?' in a file name would cut the link.
+static std::string encodePath(const std::string& path)
+{
+	const char*	digits = "0123456789ABCDEF";
+	std::string	encoded;
+
+	for (std::string::size_type i = 0; i < path.size(); i++)
+	{
+		unsigned char c = static_cast<unsigned char>(path[i]);
+
+		if (std::isalnum(c) || c == '-' || c == '.' || c == '_' || c == '~' || c == '/')
+			encoded += path[i];
+		else
+		{
+			encoded += '%';
+			encoded += digits[c / 16];
+			encoded += digits[c % 16];
+		}
+	}
+	return (encoded);
 }
 
 static std::string contentTypeFor(const std::string& filePath)
@@ -213,7 +275,7 @@ static std::string directoryListing(const std::string& path, const std::set<std:
 	if (path != "/")
 		html += "<li><a href=\"../\">../</a></li>\n";
 	for (std::set<std::string>::const_iterator it = names.begin(); it != names.end(); ++it)
-		html += "<li><a href=\"" + escapeHtml(*it) + "\">" + escapeHtml(*it) + "</a></li>\n";
+		html += "<li><a href=\"" + encodePath(*it) + "\">" + escapeHtml(*it) + "</a></li>\n";
 	html += "</ul>\n</body>\n</html>\n";
 	return (html);
 }
@@ -223,11 +285,12 @@ static std::string directoryListing(const std::string& path, const std::set<std:
 std::string Server::handleRequest(const Request& request, const ServerConfig& server) const
 {
 	const std::string&	method = request.getMethod();
-	std::string			path = requestPath(request.getTarget());
+	std::string			path;
 
 	if (method != "GET" && method != "POST" && method != "DELETE")
 		return (buildResponse(501, "Not Implemented", "501 Not Implemented\n"));
-	if (path.empty() || path[0] != '/')
+	// Decoded before any check: "%2e%2e" must reach resolvePath as "..".
+	if (!decodePath(requestPath(request.getTarget()), path) || path.empty() || path[0] != '/')
 		return (buildResponse(400, "Bad Request", "400 Bad Request\n"));
 
 	const LocationConfig& location = server.findLocation(path);
