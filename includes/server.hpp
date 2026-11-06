@@ -65,11 +65,13 @@ class Server
 		std::string handleGet(const std::string& path, const LocationConfig& location) const;
 		std::string handleDirectory(const std::string& path, const std::string& dirPath,
 			const LocationConfig& location) const;
-		std::string serveFile(const std::string& filePath) const;
+		std::string serveFile(const std::string& filePath, const LocationConfig& location) const;
 		std::string handlePost(const Request& request, const std::string& path, const LocationConfig& location) const;
 		std::string handleDelete(const std::string& path, const LocationConfig& location) const;
 		std::string buildResponse(int statusCode, const std::string& reason, const std::string& body,
 			const std::string& contentType = "text/plain", const std::string& extraHeaders = "") const;
+		std::string buildError(int code, const LocationConfig* location,
+			const std::string& extraHeaders = "") const;
 };
 
 

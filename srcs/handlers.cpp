@@ -280,6 +280,36 @@ static std::string directoryListing(const std::string& path, const std::set<std:
 	return (html);
 }
 
+static std::string reasonPhrase(int code)
+{
+	switch (code)
+	{
+		case 400: return ("Bad Request");
+		case 403: return ("Forbidden");
+		case 404: return ("Not Found");
+		case 405: return ("Method Not Allowed");
+		case 409: return ("Conflict");
+		case 411: return ("Length Required");
+		case 413: return ("Content Too Large");
+		case 431: return ("Request Header Fields Too Large");
+		case 500: return ("Internal Server Error");
+		case 501: return ("Not Implemented");
+	}
+	return ("Error");
+}
+
+// Page sent when the configuration gives none for this code.
+static std::string defaultErrorPage(int code, const std::string& reason)
+{
+	std::ostringstream page;
+
+	page << "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"UTF-8\">\n"
+		<< "<title>" << code << " " << reason << "</title>\n</head>\n<body>\n"
+		<< "<h1>" << code << " " << reason << "</h1>\n<hr>\n<p>webserv</p>\n"
+		<< "</body>\n</html>\n";
+	return (page.str());
+}
+
 // Applies the rules shared by every method, then chooses the handler.
 // The order matters: unknown method, redirection, then allowed methods.
 std::string Server::handleRequest(const Request& request, const ServerConfig& server) const
@@ -288,10 +318,10 @@ std::string Server::handleRequest(const Request& request, const ServerConfig& se
 	std::string			path;
 
 	if (method != "GET" && method != "POST" && method != "DELETE")
-		return (buildResponse(501, "Not Implemented", "501 Not Implemented\n"));
+		return (buildError(501, NULL));
 	// Decoded before any check: "%2e%2e" must reach resolvePath as "..".
 	if (!decodePath(requestPath(request.getTarget()), path) || path.empty() || path[0] != '/')
-		return (buildResponse(400, "Bad Request", "400 Bad Request\n"));
+		return (buildError(400, NULL));
 
 	const LocationConfig& location = server.findLocation(path);
 
@@ -299,8 +329,7 @@ std::string Server::handleRequest(const Request& request, const ServerConfig& se
 		return (buildResponse(location.redirectCode, redirectReason(location.redirectCode), "",
 			"text/plain", "Location: " + location.redirectUrl + "\r\n"));
 	if (!location.isMethodAllowed(method))
-		return (buildResponse(405, "Method Not Allowed", "405 Method Not Allowed\n",
-			"text/plain", "Allow: " + allowedMethods(location) + "\r\n"));
+		return (buildError(405, &location, "Allow: " + allowedMethods(location) + "\r\n"));
 	if (method == "GET")
 		return (handleGet(path, location));
 	if (method == "POST")
@@ -313,13 +342,13 @@ std::string Server::handleGet(const std::string& path, const LocationConfig& loc
 	std::string filePath = resolvePath(location, path);
 
 	if (filePath.empty())
-		return (buildResponse(403, "Forbidden", "403 Forbidden\n"));
+		return (buildError(403, &location));
 
 	struct stat info;
 
 	if (stat(filePath.c_str(), &info) == 0 && S_ISDIR(info.st_mode))
 		return (handleDirectory(path, filePath, location));
-	return (serveFile(filePath));
+	return (serveFile(filePath, location));
 }
 
 // In order: add the missing '/', serve the index file, list the content
@@ -337,29 +366,29 @@ std::string Server::handleDirectory(const std::string& path, const std::string& 
 	struct stat	info;
 
 	if (stat(indexPath.c_str(), &info) == 0 && S_ISREG(info.st_mode))
-		return (serveFile(indexPath));
+		return (serveFile(indexPath, location));
 	if (!location.autoindex)
-		return (buildResponse(403, "Forbidden", "403 Forbidden\n"));
+		return (buildError(403, &location));
 
 	std::set<std::string> names;
 
 	if (!readDirectory(dirPath, names))
-		return (buildResponse(403, "Forbidden", "403 Forbidden\n"));
+		return (buildError(403, &location));
 	return (buildResponse(200, "OK", directoryListing(path, names), "text/html"));
 }
 
 // stat before open: opening a FIFO would block the whole server.
-std::string Server::serveFile(const std::string& filePath) const
+std::string Server::serveFile(const std::string& filePath, const LocationConfig& location) const
 {
 	struct stat	info;
 	std::string	content;
 
 	if (stat(filePath.c_str(), &info) == -1 || !S_ISREG(info.st_mode))
-		return (buildResponse(404, "Not Found", "404 Not Found\n"));
+		return (buildError(404, &location));
 	if (access(filePath.c_str(), R_OK) == -1)
-		return (buildResponse(403, "Forbidden", "403 Forbidden\n"));
+		return (buildError(403, &location));
 	if (!readWholeFile(filePath, content))
-		return (buildResponse(500, "Internal Server Error", "500 Internal Server Error\n"));
+		return (buildError(500, &location));
 	return (buildResponse(200, "OK", content, contentTypeFor(filePath)));
 }
 
@@ -368,24 +397,24 @@ std::string Server::handlePost(const Request& request, const std::string& path,
 	const LocationConfig& location) const
 {
 	if (location.uploadStore.empty())
-		return (buildResponse(403, "Forbidden", "403 Forbidden\n"));
+		return (buildError(403, &location));
 	if (!request.hasContentLength())
-		return (buildResponse(411, "Length Required", "411 Length Required\n"));
+		return (buildError(411, &location));
 
 	std::string filename = path.substr(location.path.size());
 
 	if (!filename.empty() && filename[0] == '/')
 		filename.erase(0, 1);
 	if (!isValidUploadFilename(filename))
-		return (buildResponse(400, "Bad Request", "400 Bad Request\n"));
+		return (buildError(400, &location));
 
 	int status = saveUploadedFile(location.uploadStore + "/" + filename, request.getBody());
 
 	if (status == 201)
 		return (buildResponse(201, "Created", "201 Created\n"));
 	if (status == 409)
-		return (buildResponse(409, "Conflict", "409 Conflict\n"));
-	return (buildResponse(500, "Internal Server Error", "500 Internal Server Error\n"));
+		return (buildError(409, &location));
+	return (buildError(500, &location));
 }
 
 std::string Server::handleDelete(const std::string& path, const LocationConfig& location) const
@@ -394,12 +423,34 @@ std::string Server::handleDelete(const std::string& path, const LocationConfig& 
 	struct stat info;
 
 	if (filePath.empty())
-		return (buildResponse(403, "Forbidden", "403 Forbidden\n"));
+		return (buildError(403, &location));
 	if (stat(filePath.c_str(), &info) == -1 || !S_ISREG(info.st_mode))
-		return (buildResponse(404, "Not Found", "404 Not Found\n"));
+		return (buildError(404, &location));
 	if (unlink(filePath.c_str()) == -1)
-		return (buildResponse(500, "Internal Server Error", "500 Internal Server Error\n"));
+		return (buildError(500, &location));
 	return (buildResponse(204, "No Content", ""));
+}
+
+// The page of the location's error_page for this code if it can be read,
+// otherwise a generated page. The status code stays the error code either way.
+std::string Server::buildError(int code, const LocationConfig* location,
+	const std::string& extraHeaders) const
+{
+	std::string reason = reasonPhrase(code);
+
+	if (location != NULL)
+	{
+		std::map<int, std::string>::const_iterator page = location->errorPages.find(code);
+		struct stat info;
+		std::string content;
+
+		// stat first, as in serveFile: an error page that is a FIFO must not block.
+		if (page != location->errorPages.end()
+			&& stat(page->second.c_str(), &info) == 0 && S_ISREG(info.st_mode)
+			&& readWholeFile(page->second, content))
+			return (buildResponse(code, reason, content, contentTypeFor(page->second), extraHeaders));
+	}
+	return (buildResponse(code, reason, defaultErrorPage(code, reason), "text/html", extraHeaders));
 }
 
 std::string Server::buildResponse(int statusCode, const std::string& reason, const std::string& body,

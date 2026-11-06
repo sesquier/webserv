@@ -17,6 +17,7 @@ server {
 server {
     listen 8182;
     root ./www/site2;
+    error_page 404 ./www/does_not_exist.html;
 }
 """
 
@@ -62,6 +63,11 @@ def test_listeners_and_servers():
 		expected = ["./www/site1", "./www/site1", "./www/site2"]
 		report("Each client is attached to the server of its port",
 			len(roots) == 3 and all(root in line for root, line in zip(expected, roots)))
+		with socket.create_connection(("127.0.0.1", 8182), timeout=3) as sock:
+			sock.sendall(b"GET /nope HTTP/1.1\r\nHost: x\r\n\r\n")
+			answer = sock.recv(4096)
+		report("Missing error_page file falls back to the generated page",
+			answer.startswith(b"HTTP/1.1 404 ") and b"<h1>404 Not Found</h1>" in answer)
 		conflict = run_and_exit([path])
 		report("Address already in use is a clean error",
 			conflict.returncode == 1 and "cannot listen on" in conflict.stderr, conflict.stderr.strip())
