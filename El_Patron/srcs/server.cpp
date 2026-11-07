@@ -6,7 +6,7 @@
 /*   By: ale-coss <ale-coss@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/10/22 16:51:26 by ale-coss          #+#    #+#             */
-/*   Updated: 2026/11/03 16:14:16 by ale-coss         ###   ########.fr       */
+/*   Updated: 2026/11/07 19:00:14 by ale-coss         ###   ########.fr       */
 /*                                                                            */
 /******************************************************************************/
 
@@ -14,84 +14,45 @@
 #include "request.hpp"
 #include <sys/epoll.h>
 #include <sys/socket.h>
-#include <sys/stat.h>
 #include <netinet/in.h>
-#include <arpa/inet.h>
+#include <netdb.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
 #include <sstream>
-#include <cerrno>
-#include <cstdio>
 
-static bool isValidUploadFilename(const std::string& filename)
+// Returns the listening socket, or -1 if any step fails.
+static int openListeningSocket(const struct addrinfo* info)
 {
-    if (filename.empty() || filename == "." || filename == "..")
-        return (false);
-    
-    for (std::string::size_type i = 0; i < filename.size(); i++)
-    {
-        char c = filename[i];
+	int fd = socket(info->ai_family, info->ai_socktype, info->ai_protocol);
 
-        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-'))
-            return (false);
-    }
-    return (true);
+	if (fd == -1)
+		return (-1);
+
+	int opt = 1;
+
+	if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1
+		|| fcntl(fd, F_SETFL, O_NONBLOCK) == -1
+		|| bind(fd, info->ai_addr, info->ai_addrlen) == -1
+		|| listen(fd, 128) == -1)
+	{
+		close(fd);
+		return (-1);
+	}
+	return (fd);
 }
 
-static int saveUploadedFile(const std::string& filePath, const std::string& body)
+static std::string addressToString(const ListenAddress& address)
 {
-    int fileFd = open(
-        filePath.c_str(),
-        O_WRONLY | O_CREAT | O_EXCL,
-        0644
-    );
+	std::ostringstream text;
 
-    if (fileFd == -1)
-    {
-        struct stat fileInfo;
-
-        if (stat(filePath.c_str(), &fileInfo) == 0)
-            return (409);
-
-        return (500);
-    }
-
-    std::string::size_type offset = 0;
-    bool writeError = false;
-
-	while (offset < body.size())
-    {
-        ssize_t bytesWritten = write(
-            fileFd,
-            body.data() + offset,
-            body.size() - offset
-        );
-
-        if (bytesWritten <= 0)
-        {
-            writeError = true;
-            break;
-        }
-
-        offset += static_cast<std::string::size_type>(bytesWritten);
-    }
-
-    if (close(fileFd) == -1)
-        writeError = true;
-
-    if (writeError)
-    {
-        unlink(filePath.c_str());
-        return (500);
-    }
-
-    return (201);
+	text << address.host << ":" << address.port;
+	return (text.str());
 }
 
-Server::Server() : _epollFd(-1), _listenFd(-1)
+Server::Server(const std::vector<ServerConfig>& configs) : _epollFd(-1), _configs(configs)
 {
 	_epollFd = epoll_create(1);
 	if (_epollFd == -1)
@@ -100,54 +61,60 @@ Server::Server() : _epollFd(-1), _listenFd(-1)
 
 Server::~Server()
 {
-	if (_listenFd != -1)
-		close(_listenFd);
+	for (std::map<int, const ServerConfig*>::iterator it = _listeners.begin(); it != _listeners.end(); ++it)
+		close(it->first);
 	if (_epollFd != -1)
 		close(_epollFd);
 }
 
-void Server::setupListeningSocket()
+// One listening socket per 'listen' directive of every server.
+void Server::setupListeningSockets()
 {
-	_listenFd = socket(AF_INET, SOCK_STREAM, 0);
-	if (_listenFd == -1)
-		throw std::runtime_error("socket failed");
-	
-	int opt = 1;
-	if (setsockopt(_listenFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == -1)
-		throw std::runtime_error("setsockopt failed");
-	int flags = fcntl(_listenFd, F_GETFL, 0);
-	if (flags == -1 || fcntl(_listenFd, F_SETFL, flags | O_NONBLOCK) == -1)
+	for (size_t i = 0; i < _configs.size(); i++)
 	{
-		close(_listenFd);
-		_listenFd = -1;
-		throw std::runtime_error("fcntl failed");
-	}	
-	struct sockaddr_in addr;
-	std::memset(&addr, 0, sizeof(addr));
+		for (size_t j = 0; j < _configs[i].listens.size(); j++)
+			addListener(_configs[i].listens[j], _configs[i]);
+	}
+}
 
-	addr.sin_family = AF_INET;
-	addr.sin_port = htons(8080);
-	addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+void Server::addListener(const ListenAddress& address, const ServerConfig& config)
+{
+	struct addrinfo hints;
+	struct addrinfo* info = NULL;
+	std::ostringstream port;
 
-	if (bind(_listenFd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) == -1)
-		throw std::runtime_error("bind failed");
-	if (listen(_listenFd, 128) == -1)
-		throw std::runtime_error("listen failed");
+	std::memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_INET;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_flags = AI_NUMERICHOST;
+	port << address.port;
+
+	if (getaddrinfo(address.host.c_str(), port.str().c_str(), &hints, &info) != 0)
+		throw std::runtime_error("invalid address " + addressToString(address));
+
+	int fd = openListeningSocket(info);
+
+	freeaddrinfo(info);
+	if (fd == -1)
+		throw std::runtime_error("cannot listen on " + addressToString(address));
+
+	// Recorded first: the destructor then closes it even if epoll_ctl fails.
+	_listeners[fd] = &config;
+
+	struct epoll_event event;
+
+	std::memset(&event, 0, sizeof(event));
+	event.events = EPOLLIN;
+	event.data.fd = fd;
+	if (epoll_ctl(_epollFd, EPOLL_CTL_ADD, fd, &event) == -1)
+		throw std::runtime_error("epoll_ctl failed");
+
+	std::cout << "Listening on " << addressToString(address) << std::endl;
 }
 
 void Server::run()
 {
-	setupListeningSocket();
-
-	struct epoll_event event;
-	std::memset(&event, 0, sizeof(event));
-	event.events = EPOLLIN;
-	event.data.fd = _listenFd;
-
-	if (epoll_ctl(_epollFd, EPOLL_CTL_ADD, _listenFd, &event) == -1)
-		throw std::runtime_error("epoll_ctl failed");
-
-	std::cout << "Listening on 127.0.0.1:8080" << std::endl;
+	setupListeningSockets();
 
 	struct epoll_event events[10];
 
@@ -155,66 +122,48 @@ void Server::run()
 	{
 		int count = epoll_wait(_epollFd, events, 10, 1000);
 
+		// A signal interrupts epoll_wait (Ctrl-Z then fg): the server must keep running.
 		if (count == -1)
-			throw std::runtime_error("epoll_wait failed");
-		
-		std::time_t now = std::time(NULL);
-		std::map<int, std::time_t>::iterator activityIt = _lastActivity.begin();
-		while (activityIt != _lastActivity.end())
-		{
-			int clientFd = activityIt->first;
-			std::time_t lastActivity = activityIt->second;
+			continue;
 
-			if (now - lastActivity >= 30)
-			{
-				++activityIt;
-				closeClient(clientFd);
-			}
-			else
-			{
-				++activityIt;
-			}
-		}
-		
 		for (int i = 0; i < count; i++)
 		{
 			int fd = events[i].data.fd;
+			std::map<int, const ServerConfig*>::iterator listener = _listeners.find(fd);
 
-			if (fd == _listenFd)
+			if (listener != _listeners.end())
 			{
-				while (true)
+				// One accept per event: epoll reports the socket again if more clients wait.
+				struct sockaddr_in clientAddr;
+				socklen_t clientLen = sizeof(clientAddr);
+
+				int clientFd = accept(fd, reinterpret_cast<struct sockaddr*>(&clientAddr), &clientLen);
+		
+				if (clientFd == -1)
+					continue;
+				if (fcntl(clientFd, F_SETFL, O_NONBLOCK) == -1)
 				{
-					struct sockaddr_in clientAddr;
-					socklen_t clientLen = sizeof(clientAddr);
-
-					int clientFd = accept(_listenFd, reinterpret_cast<struct sockaddr*>(&clientAddr), &clientLen);
-			
-					if (clientFd == -1)
-						break;
-					int flags = fcntl(clientFd, F_GETFL, 0);
-					if (flags == -1 || fcntl(clientFd, F_SETFL, flags | O_NONBLOCK) == -1)
-					{
-						close(clientFd);
-						continue;
-					}
-
-					struct epoll_event clientEvent;
-					std::memset(&clientEvent, 0, sizeof(clientEvent));
-					clientEvent.events = EPOLLIN | EPOLLRDHUP;
-					clientEvent.data.fd = clientFd;
-
-					if (epoll_ctl(_epollFd, EPOLL_CTL_ADD, clientFd, &clientEvent) == -1)
-					{
-						close(clientFd);
-						continue ;
-					}
-
-					_clients[clientFd] = "";
-					_clientStates[clientFd] = READING;
-					_lastActivity[clientFd] = std::time(NULL);
-
-					std::cout << "Client connected: fd = " << clientFd << std::endl;
+					close(clientFd);
+					continue;
 				}
+
+				struct epoll_event clientEvent;
+				std::memset(&clientEvent, 0, sizeof(clientEvent));
+				clientEvent.events = EPOLLIN | EPOLLRDHUP;
+				clientEvent.data.fd = clientFd;
+
+				if (epoll_ctl(_epollFd, EPOLL_CTL_ADD, clientFd, &clientEvent) == -1)
+				{
+					close(clientFd);
+					continue ;
+				}
+
+				_clients[clientFd] = "";
+				_clientServers[clientFd] = listener->second;
+				_clientStates[clientFd] = READING;
+				_lastActivity[clientFd] = std::time(NULL);
+
+				std::cout << "Client connected: fd = " << clientFd << std::endl;
 			}
 			else
 			{
@@ -265,384 +214,124 @@ void Server::run()
 					}
 					else
 					{
-						// if (errno == EAGAIN || errno == EWOULDBLOCK)
-						// 	continue;
-						// if (errno == EINTR)
-						// 	continue ;
 						closeClient(fd);
 						continue ;
 					}
 
-
-					// //test temporaire
-					// std::cout << "DEBUG: Bytes received: ";
-					// for (ssize_t i = 0; i < bytesReceived; ++i)
-					// {
-					// 	std::cout << static_cast<int>(static_cast<unsigned char>(buffer[i])) << " ";
-					// }
-					// std::cout << std::endl;
-					// // std::cout.write(buffer, bytesReceived) << std::endl;
-					
-					//fin du test temporaire
-
 					Request request;
 					Request::ParseStatus parseStatus;
 
-					parseStatus = request.parse(_clients[fd]);
+					parseStatus = request.parseHeaders(_clients[fd]);
 
 					if (parseStatus == Request::INCOMPLETE)
-						continue ;
+						continue;
+
 					if (parseStatus == Request::INVALID)
 					{
-						try
-						{
-							queueResponse(fd, buildResponse(400, "Bad Request", "400 Bad Request\n"));
-						}
-						catch (const std::exception& e)
-						{
-							std::cerr << "Failed to prepare error response: " << e.what() << std::endl;
-       						closeClient(fd);
-						}
-						continue ;
-					}
-					if (parseStatus == Request::BODY_TOO_LARGE)
-					{
-						std::cerr << "DEBUG parseStatus = " << parseStatus << std::endl;
-						std::cerr << "DEBUG request = [" << _clients[fd] << "]" << std::endl;
-						try
-						{
-							queueResponse(fd, buildResponse(413, "Content Too Large", "413 Content Too Large\n"));
-						}
-						catch (const std::exception& e)
-						{
-							std::cerr << "Failed to prepare error response: " << e.what() << std::endl;
-       						closeClient(fd);
-						}
-						continue ;
+						queueResponse(fd, buildResponse(400, "Bad Request", "400 Bad Request\n"));
+							continue;
 					}
 
 					if (parseStatus == Request::HEADERS_TOO_LARGE)
 					{
-						try
-						{
-							queueResponse(fd, buildResponse(431, "Request Header Fields Too Large", "431 Request Header Fields Too Large\n"));
-						}
-						catch (const std::exception& e)
-						{
-							std::cerr << "Failed to prepare error response: " << e.what() << std::endl;
-       						closeClient(fd);
-						}
+						queueResponse(fd, buildResponse(431, "Request Header Fields Too Large", "431 Request Header Fields Too Large\n"));
+							continue;
+					}
+
+					std::string path = request.getTarget();
+					std::string::size_type queryPos = path.find('?');
+
+					if (queryPos != std::string::npos)
+						path.erase(queryPos);
+
+					std::string decodedPath;
+					
+					if (!decodePath(path, decodedPath))
+					{
+						queueResponse(fd, buildResponse(400, "Bad Request", "400 Bad Request\n"));
 						continue ;
 					}
-					
-					std::cout << "Request parsed: "
-              				<< request.getMethod() << " "
-              				<< request.getTarget() << " "
-              				<< request.getVersion() << std::endl;
+					path = decodedPath;	
+					const LocationConfig& location = _clientServers[fd]->findLocation(path);
 
-					std::string response;
+					parseStatus = request.parseBody(
+					_clients[fd], location.maxBodySize);
 
-					if (request.getMethod() == "GET")
-					{	
-						std::string target = request.getTarget();
+					if (parseStatus == Request::INCOMPLETE)
+						continue;
 
-						// Retirer la query string, par exemple ?page=2.
-						std::string::size_type queryPos = target.find('?');
-
-						if (queryPos != std::string::npos)
-						target.erase(queryPos);
-
-						// Le chemin d'une cible HTTP doit commencer par '/'.
-						if (target.empty() || target[0] != '/')
-						{
-							response = buildResponse(400, "Bad Request", "400 Bad Request\n");
-						}
-						else
-						{
-							// Vérifier les segments du chemin pour empêcher
-							// les tentatives de remontée dans les répertoires.
-							bool forbidden = false;
-							std::string::size_type pos = 0;
-
-							while (pos < target.size())
-							{
-								std::string::size_type end = target.find('/', pos);
-
-								if (end == std::string::npos)
-									end = target.size();
-
-								std::string segment = target.substr(pos, end - pos);
-
-								if (segment == "..")
-								{
-									forbidden = true;
-									break;
-								}
-
-								if (end == target.size())
-									break;
-
-								pos = end + 1;
-							}
-
-							if (forbidden)
-							{
-								response = buildResponse(403, "Forbidden", "403 Forbidden\n");
-							}
-							else
-							{
-								// Pour '/', servir la page d'accueil.
-								if (target == "/")
-									target = "/index.html";
-
-								// Le répertoire public est temporairement fixé à ./www.
-								std::string filePath = "./www" + target;
-
-								int fileFd = open(filePath.c_str(), O_RDONLY);
-
-								if (fileFd == -1)
-								{
-									response = buildResponse(404, "Not Found", "404 Not Found\n");
-								}
-								else
-								{
-									struct stat fileInfo;
-
-									if (fstat(fileFd, &fileInfo) == -1 || !S_ISREG(fileInfo.st_mode))
-									{
-										close(fileFd);
-
-										response = buildResponse(404, "Not Found", "404 Not Found\n");
-									}
-									else
-									{
-										std::string body;
-										char buffer[4096];
-										bool readError = false;
-
-										while (true)
-										{
-											ssize_t bytesRead = read(fileFd, buffer, sizeof(buffer));
-
-											if (bytesRead > 0)
-											{
-												body.append(buffer, bytesRead);
-											}
-											else if (bytesRead == 0)
-											{
-												// Fin du fichier.
-												break;
-											}
-											else
-											{
-												// Pas de consultation d'errno après read().
-												readError = true;
-												break;
-											}
-										}
-
-										close(fileFd);
-
-										if (readError)
-										{
-											response = buildResponse(500, "Internal Server Error", "500 Internal Server Error\n");
-										}
-										else
-										{
-											// Déterminer le type de contenu grâce à l'extension.
-											std::string contentType = "application/octet-stream";
-
-											std::string::size_type dotPos =
-											target.find_last_of('.');
-
-											if (dotPos != std::string::npos)
-											{
-												std::string extension = target.substr(dotPos);
-
-												if (extension == ".html" || extension == ".htm")
-													contentType = "text/html";
-												else if (extension == ".css")
-													contentType = "text/css";
-												else if (extension == ".js")
-													contentType = "application/javascript";
-												else if (extension == ".txt")
-													contentType = "text/plain";
-												else if (extension == ".json")
-													contentType = "application/json";
-												else if (extension == ".png")
-													contentType = "image/png";
-												else if (extension == ".jpg" || extension == ".jpeg")
-													contentType = "image/jpeg";
-												else if (extension == ".gif")
-													contentType = "image/gif";
-												else if (extension == ".svg")
-													contentType = "image/svg+xml";
-											}
-
-											response = buildResponse(200, "OK", body, contentType);
-										}
-									}
-								}
-							}
-						}
-					}
-					else if (request.getMethod() == "POST")
+					if (parseStatus == Request::INVALID)
 					{
-    					std::string target = request.getTarget();
+						queueResponse(fd, buildResponse(400, "Bad Request", "400 Bad Request\n"));
+							continue;
+					}
 
-    					std::string::size_type queryPos = target.find('?');
+					if (parseStatus == Request::BODY_TOO_LARGE)
+					{
+						queueResponse(fd, buildResponse(413, "Content Too Large", "413 Content Too Large\n"));
+							continue;
+					}
 
-    					if (queryPos != std::string::npos)
-        					target.erase(queryPos);
+					std::cout << "Request parsed: " << request.getMethod() << " " << request.getTarget() << " "
+					<< request.getVersion() << " (server root: " << _clientServers[fd]->root << ")" << std::endl;
 
-    					const std::string prefix = "/upload/";
+					std::string response = handleRequest(request, *_clientServers[fd]);
 
-    					if (target.compare(0, prefix.size(), prefix) != 0)
-    					{
-        					response = buildResponse(404, "Not Found", "404 Not Found\n");
-						}
-    					else if (!request.hasContentLength())
-    					{
-        					response = buildResponse(411, "Length Required", "411 Length Required\n");
-    					}
-						else
-    					{
-        					std::string filename = target.substr(prefix.size());
+					// Request request;
+					// Request::ParseStatus parseStatus;
 
-        					if (!isValidUploadFilename(filename))
-        					{
-            					response = buildResponse(400, "Bad Request", "400 Bad Request\n");
-        					}
-        					else
-        					{
-            					std::string filePath = "./www/uploads/" + filename;
+					// parseStatus = request.parse(_clients[fd]);
 
-            					int status = saveUploadedFile(filePath, request.getBody());
-		
-								if (status == 201)
-            					{
-                					response = buildResponse(201, "Created", "201 Created\n");
-            					}
-            					else if (status == 409)
-            					{
-                					response = buildResponse(409, "Conflict", "409 Conflict\n");
-            					}
-            					else
-            					{
-                					response = buildResponse(500, "Internal Server Error", "500 Internal Server Error\n");
-								}	
-            				}
-        				}
-    				}
-
-
-					// else if (request.getMethod() == "POST")
+					// if (parseStatus == Request::INCOMPLETE)
+					// 	continue ;
+					// if (parseStatus == Request::INVALID)
 					// {
-					// 	std::string target = request.getTarget();
-
-					// 	//retirer query string
-					// 	std::string::size_type queryPos = target.find('?');
-
-					// 	if (queryPos != std::string::npos)
-					// 		target.erase(queryPos);
-						
-					// 	//cette premiere version accepte iniquement /upload/nom_fichier.
-					// 	const std::string prefix = "/upload/";
-
-					// 	if (target.compare(0, prefix.size(), prefix) != 0)
-					// 		response = buildResponse(404, "Not Found", "404 Not Found\n");
-					// 	else if (!request.hasContentLength())
-					// 		response = buildResponse(411, "Length Required", "411 Length Required\n");
-					// 	else
+					// 	try
 					// 	{
-					// 		std::string filename = target.substr(prefix.size());
-							
-					// 		if (!isValidUploadFilename(filename))
-					// 			response = buildResponse(400, "Bad Request", "400 Bad Request\n");
-					// 		else
-					// 		{
-					// 			std::string filePath = "./www/uploads/" + filename;
-
-					// 			int fileFd = open(filePath.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0644);
-
-					// 			if (fileFd == -1)
-					// 				response = buildResponse(500, "Internal Server Error", "500 Internal Server Error\n");
-					// 			else
-					// 			{
-					// 				const std::string& body = request.getBody();
-					// 				std::string::size_type offset = 0;
-					// 				bool writeError = false;
-
-					// 				while (offset < body.size())
-					// 				{
-					// 					ssize_t bytesWritten = write(fileFd, body.data() + offset, body.size() - offset);
-
-					// 					if (bytesWritten <= 0)
-					// 					{
-					// 						writeError = true;
-					// 						break;
-					// 					}
-
-					// 					offset += static_cast<std::string::size_type>(bytesWritten);
-					// 				}
-					// 				close(fileFd);
-
-					// 				if (writeError)
-					// 					response = buildResponse(500, "Internal Server Error", "500 Internal Server Error\n");
-					// 				else
-					// 					response = buildResponse(201, "Created", "201 Created\n");
-
-					// 			}
-					// 		}	
+					// 		queueResponse(fd, buildResponse(400, "Bad Request", "400 Bad Request\n"));
 					// 	}
-
+					// 	catch (const std::exception& e)
+					// 	{
+					// 		std::cerr << "Failed to prepare error response: " << e.what() << std::endl;
+       				// 		closeClient(fd);
+					// 	}
+					// 	continue ;
 					// }
-					else if (request.getMethod() == "DELETE")
-					{
-						std::string target = request.getTarget();
-						std::string::size_type queryPos = target.find('?');
-						
-						if (queryPos != std::string::npos)
-							target.erase(queryPos);
-
-						const std::string prefix = "/uploads/";
-
-						if (target.compare(0, prefix.size(), prefix) != 0)
-							response = buildResponse(404, "Not Found", "404 Not Found\n");
-						else
-						{
-							std::string filename = target.substr(prefix.size());
-
-							if (!isValidUploadFilename(filename))
-								response = buildResponse(400, "Bad Request", "400 Bad Request\n");
-							else
-							{
-								std::string filePath = "./www/uploads/" + filename;
-								struct stat fileInfo;
-
-								if (stat(filePath.c_str(), &fileInfo) || !S_ISREG(fileInfo.st_mode))
-									response = buildResponse(404, "Not Found", "404 Not Found\n");
-								else if (unlink(filePath.c_str()) == -1)
-									response = buildResponse(500, "Internal Server Error", "500 Internal Server Error\n");
-								else
-									response = buildResponse(204, "No Content", "");
-
-
-
-							}
-						}
-					}
-					else
-						response = buildResponse(501, "Not Implemented", "501 Not Implemented\n");
-
-					// if (request.getMethod() == "GET")
+					// if (parseStatus == Request::BODY_TOO_LARGE)
 					// {
-					// 	response = buildResponse(200, "OK", "Hello World!\n");
+					// 	try
+					// 	{
+					// 		queueResponse(fd, buildResponse(413, "Content Too Large", "413 Content Too Large\n"));
+					// 	}
+					// 	catch (const std::exception& e)
+					// 	{
+					// 		std::cerr << "Failed to prepare error response: " << e.what() << std::endl;
+       				// 		closeClient(fd);
+					// 	}
+					// 	continue ;
 					// }
-					// else
+
+					// if (parseStatus == Request::HEADERS_TOO_LARGE)
 					// {
-					// 	response = buildResponse(501, "Not Implemented", "501 Not Implemented\n");
+					// 	try
+					// 	{
+					// 		queueResponse(fd, buildResponse(431, "Request Header Fields Too Large", "431 Request Header Fields Too Large\n"));
+					// 	}
+					// 	catch (const std::exception& e)
+					// 	{
+					// 		std::cerr << "Failed to prepare error response: " << e.what() << std::endl;
+       				// 		closeClient(fd);
+					// 	}
+					// 	continue ;
 					// }
+					
+					// std::cout << "Request parsed: "
+              		// 		<< request.getMethod() << " "
+              		// 		<< request.getTarget() << " "
+              		// 		<< request.getVersion()
+              		// 		<< " (server root: " << _clientServers[fd]->root << ")" << std::endl;
+
+					// std::string response = handleRequest(request, *_clientServers[fd]);
 
 					try
 					{
@@ -656,6 +345,25 @@ void Server::run()
 				}
 			}
 		}
+
+		// After the events: closing a client here cannot affect the events still to handle.
+		std::time_t now = std::time(NULL);
+		std::map<int, std::time_t>::iterator activityIt = _lastActivity.begin();
+		while (activityIt != _lastActivity.end())
+		{
+			int clientFd = activityIt->first;
+			std::time_t lastActivity = activityIt->second;
+
+			if (now - lastActivity >= 30)
+			{
+				++activityIt;
+				closeClient(clientFd);
+			}
+			else
+			{
+				++activityIt;
+			}
+		}
 	}
 }
 
@@ -664,70 +372,19 @@ void Server::closeClient(int clientFd)
 	epoll_ctl(_epollFd, EPOLL_CTL_DEL, clientFd, NULL);
 	close(clientFd);
 	_clients.erase(clientFd);
+	_clientServers.erase(clientFd);
 	_responses.erase(clientFd);
 	_bytesSent.erase(clientFd);
 	_clientStates.erase(clientFd);
 	_lastActivity.erase(clientFd);
 }
 
-std::string Server::buildResponse(int statusCode, const std::string& reason, const std::string& body, const std::string&  contentType) const
-{
-	std::ostringstream lengthStream;
-	lengthStream << body.size();
-
-	std::ostringstream statusStream;
-	statusStream << statusCode;
-	
-	std::string response;
-	
-	response += "HTTP/1.1 ";
-	response += statusStream.str();
-	response += " ";
-	response += reason;
-	response += "\r\n";
-
-	response += "Content-Type: ";
-	response += contentType;
-	response += "\r\n";
-
-	response += "Content-Length: ";
-	response += lengthStream.str();
-	response += "\r\n";
-	
-	response += "Connection: close\r\n";
-	response += "\r\n";
-	
-	response += body;
-
-	return (response);
-}
-
-// std::string Server::buildError() const
-// {
-// 	const std::string body = "Error";
-// 	std::ostringstream lengthStream;
-// 	lengthStream << body.size();
-
-// 	std::string response;
-// 	response += "HTTP/1.1 404 Not found\r\n";
-// 	response += "Content-Type: text/plain\r\n";
-// 	response += "Content-Length: ";
-// 	response += lengthStream.str();
-// 	response += "\r\n";
-// 	response += "Connection: close \r\n";
-// 	response += "\r\n";
-// 	response += body;
-
-// 	return (response);
-// }
-
 void Server::enableWriteEvent(int clientFd)
 {
 	struct epoll_event event;
 	std::memset(&event, 0, sizeof(event));
 
-	event.events = EPOLLOUT
-	;
+	event.events = EPOLLOUT;
 	event.data.fd = clientFd;
 
 	if (epoll_ctl(_epollFd, EPOLL_CTL_MOD, clientFd, &event) == -1)
@@ -767,14 +424,6 @@ void Server::handleClientWrite(int clientFd)
         if (sentIt->second == response.size())
             closeClient(clientFd);
     }
-	// else if (bytesSent == -1)
-	// {
-	// 	// if (errno == EAGAIN || errno == EWOULDBLOCK)
-	// 	// 	return ;
-	// 	// if (errno == EINTR)
-	// 	// 	return ;
-	// 	closeClient(clientFd);
-	// }
 	else
 	{
 		closeClient(clientFd);

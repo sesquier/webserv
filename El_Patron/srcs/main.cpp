@@ -11,15 +11,29 @@
 /******************************************************************************/
 
 #include "server.hpp"
+#include "config/Config.hpp"
 #include <iostream>
 #include <exception>
 
-int main()
+int main(int argc, char** argv)
 {
+	if (argc > 2)
+	{
+		std::cerr << "usage: " << argv[0] << " [configuration file]" << std::endl;
+		return (1);
+	}
 	try
 	{
-		Server server;
+		// Declared first: the Server keeps pointers to these objects until the end.
+		const std::vector<ServerConfig> configs = loadConfig(argc == 2 ? argv[1] : "config/default.conf");
+		Server server(configs);
+
 		server.run();
+	}
+	catch (const ConfigError& e)
+	{
+		std::cerr << "webserv: config error: " << e.what() << std::endl;
+		return (1);
 	}
 	catch (const std::exception& e)
 	{

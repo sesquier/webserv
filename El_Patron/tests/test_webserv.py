@@ -9,7 +9,7 @@ import concurrent.futures
 HOST = "127.0.0.1"
 PORT = 8080
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-UPLOAD_DIR = os.path.join(BASE_DIR, "www", "uploads")
+UPLOAD_DIR = os.path.join(BASE_DIR, "www", "site1", "uploads")
 
 passed = 0
 failed = 0
@@ -153,7 +153,7 @@ def main():
 	try:
 		status, body = request(
 			"DELETE",
-			"/uploads/" + filename
+			"/upload/" + filename
 		)
 
 		test("DELETE existing file returns 204",
@@ -169,7 +169,7 @@ def main():
 	try:
 		status, body = request(
 			"DELETE",
-			"/uploads/does-not-exist.txt"
+			"/upload/does-not-exist.txt"
 		)
 
 		test("DELETE missing file returns 404",

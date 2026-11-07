@@ -6,7 +6,7 @@
 /*   By: ale-coss <ale-coss@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/10/25 17:27:20 by ale-coss          #+#    #+#             */
-/*   Updated: 2026/11/02 13:05:18 by ale-coss         ###   ########.fr       */
+/*   Updated: 2026/11/07 18:56:05 by ale-coss         ###   ########.fr       */
 /*                                                                            */
 /******************************************************************************/
 
@@ -29,14 +29,19 @@ class Request
 		
 		Request();
 
-		ParseStatus parse(const std::string& raw);
+		ParseStatus parse(const std::string& raw, std::string::size_type maxBodySize);
 		
+		ParseStatus parseHeaders(const std::string& raw);
+		ParseStatus parseBody(const std::string& raw, std::string::size_type maxBodySize);
+
+
 		const std::string& getMethod() const;
 		const std::string& getTarget() const;
 		const std::string& getVersion() const;
 		const std::string& getBody() const;
 
 		bool hasContentLength() const;
+		bool hasBodyFraming() const;
 
 
 	private:
@@ -46,7 +51,12 @@ class Request
 		std::string _body;
 
 		bool _hasContentLength;
+		bool _isChunked;
+		std::string::size_type _contentLength;
+		std::string::size_type _bodyStart;
+
 };
 
+bool decodePath(const std::string& encoded, std::string& decoded);
 
 #endif

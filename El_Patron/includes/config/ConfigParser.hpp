@@ -1,0 +1,103 @@
+#ifndef CONFIGPARSER_HPP
+#define CONFIGPARSER_HPP
+
+#include <map>
+#include <set>
+#include <string>
+#include <vector>
+#include "config/Token.hpp"
+#include "config/ServerConfig.hpp"
+
+// Recursive descent parser: turns the token list into ServerConfig objects.
+// Grammar:
+//   config    := server+
+//   server    := "server" "{" (location | directive)* "}"
+//   location  := "location" PATH "{" directive* "}"
+//   directive := NAME ARG* ";"
+class ConfigParser
+{
+	public:
+		explicit ConfigParser(const std::vector<Token>& tokens);
+		~ConfigParser();
+
+		std::vector<ServerConfig> parse();
+
+	private:
+		// One "name arg1 arg2 ;" statement, before interpretation.
+		struct Directive
+		{
+			std::string					name;
+			std::vector<std::string>	args;
+			int							line;
+		};
+
+		// Pointers to member functions: one handler per directive name.
+		typedef void (ConfigParser::*ServerHandler)(ServerConfig&, const Directive&);
+		typedef void (ConfigParser::*LocationHandler)(LocationConfig&, const Directive&);
+
+		std::vector<Token>						_tokens;
+		size_t									_pos;
+		std::map<std::string, ServerHandler>	_serverHandlers;
+		std::map<std::string, LocationHandler>	_locationHandlers;
+		std::set<std::string>					_seenInServer;		// directives of the current server
+		std::set<std::string>					_seenInLocation;	// directives of the current location
+		std::vector<ListenAddress>				_usedAddresses;		// every 'listen' of the file so far
+
+		// Token navigation
+		bool			isAtEnd() const;
+		const Token&	current() const;
+		void			advance();
+		bool			isWord(const std::string& value) const;
+		void			expect(Token::Type type, const std::string& what);
+		bool			isBlockEnd(int openLine) const;
+
+		// Grammar rules
+		ServerConfig	parseServer();
+		LocationConfig	parseLocation();
+		Directive		parseDirective();
+		void			rejectNestedBlock(const std::string& context) const;
+		void			addLocation(ServerConfig& server);
+		void			requireEssentials(const ServerConfig& server, int openLine) const;
+
+		// Dispatch to the directive handlers
+		void	initHandlers();
+		void	applyServerDirective(ServerConfig& server, const Directive& directive);
+		void	applyLocationDirective(LocationConfig& location, const Directive& directive);
+		void	requireArgCount(const Directive& directive, size_t expected) const;
+		void	requireArgCount(const Directive& directive, size_t min, size_t max) const;
+		void	rejectDuplicate(std::set<std::string>& seen, const Directive& directive) const;
+
+		// Directive handlers
+		void	parseServerRoot(ServerConfig& server, const Directive& directive);
+		void	parseLocationRoot(LocationConfig& location, const Directive& directive);
+		void	parseServerIndex(ServerConfig& server, const Directive& directive);
+		void	parseLocationIndex(LocationConfig& location, const Directive& directive);
+		void	parseAutoindex(LocationConfig& location, const Directive& directive);
+		void	parseMethods(LocationConfig& location, const Directive& directive);
+		void	parseUploadStore(LocationConfig& location, const Directive& directive);
+		void	parseReturn(LocationConfig& location, const Directive& directive);
+		void	parseCgi(LocationConfig& location, const Directive& directive);
+		void	parseServerErrorPage(ServerConfig& server, const Directive& directive);
+		void	parseLocationErrorPage(LocationConfig& location, const Directive& directive);
+		void	addErrorPage(std::map<int, std::string>& errorPages, const Directive& directive);
+		void	parseServerBodySize(ServerConfig& server, const Directive& directive);
+		void	parseLocationBodySize(LocationConfig& location, const Directive& directive);
+		size_t	readBodySize(const Directive& directive);
+		void	parseListen(ServerConfig& server, const Directive& directive);
+
+		static void			finalizeServer(ServerConfig& server);
+		static void			applyServerDefaults(ServerConfig& server);
+		static void			ensureRootLocation(ServerConfig& server);
+		static void			inheritFromServer(LocationConfig& location, const ServerConfig& server);
+		static void			applyLocationDefaults(LocationConfig& location);
+		static std::string	normalizeLocationPath(const std::string& path);
+		static bool			parseNumber(const std::string& text, long& value);
+		static bool			isValidIpv4(const std::string& ip);
+		static bool			isValidIpv4Part(const std::string& part);
+		static bool			addressesConflict(const ListenAddress& a, const ListenAddress& b);
+
+		ConfigParser(const ConfigParser& other);
+		ConfigParser& operator=(const ConfigParser& rhs);
+};
+
+#endif
