@@ -10,6 +10,8 @@
 #include <sstream>
 #include <set>
 #include <cctype>
+//debug :
+// #include <iostream>
 
 static bool isValidUploadFilename(const std::string& filename)
 {
@@ -28,13 +30,9 @@ static bool isValidUploadFilename(const std::string& filename)
 
 static int saveUploadedFile(const std::string& filePath, const std::string& body)
 {
-    int fileFd = open(
-        filePath.c_str(),
-        O_WRONLY | O_CREAT | O_EXCL,
-        0644
-    );
-
-    if (fileFd == -1)
+    int fileFd = open(filePath.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0644);
+  
+	if (fileFd == -1)
     {
         struct stat fileInfo;
 
@@ -64,7 +62,7 @@ static int saveUploadedFile(const std::string& filePath, const std::string& body
         offset += static_cast<std::string::size_type>(bytesWritten);
     }
 
-    if (close(fileFd) == -1)
+	if (close(fileFd) == -1)
         writeError = true;
 
     if (writeError)

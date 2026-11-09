@@ -6,7 +6,7 @@
 /*   By: ale-coss <ale-coss@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/10/25 17:34:25 by ale-coss          #+#    #+#             */
-/*   Updated: 2026/11/07 19:09:38 by ale-coss         ###   ########.fr       */
+/*   Updated: 2026/11/09 16:05:13 by ale-coss         ###   ########.fr       */
 /*                                                                            */
 /******************************************************************************/
 
@@ -230,8 +230,19 @@ Request::ParseStatus Request::parseHeaders(const std::string& raw)
     _target = line.substr(firstSpace + 1, secondSpace - firstSpace - 1);
     _version = line.substr(secondSpace + 1);
 
-    if (_method.empty() || _target.empty() || _version.empty() || _version.find(' ') != std::string::npos)
+    if (_method.empty() || _target.empty() || _version.empty()
+            || _version.find(' ') != std::string::npos)
         return (INVALID);
+
+    for (std::string::size_type i = 0; i < _method.size(); ++i)
+    {
+        char c = _method[i];
+
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+            || c == '!' || c == '#' || c == '$' || c == '%' || c == '&' || c == '\'' || c == '*'
+            || c == '+' || c == '-' || c == '.' || c == '^' || c == '_' || c == '`' || c == '|' || c == '~'))
+            return (INVALID);
+    }
 
     if (_version != "HTTP/1.0" && _version != "HTTP/1.1")
         return (INVALID);
@@ -240,6 +251,8 @@ Request::ParseStatus Request::parseHeaders(const std::string& raw)
 
     if (lineEnd != std::string::npos)
         pos = lineEnd + 1;
+
+    bool hasHost = false;
 
     while (pos < headers.size())
     {
@@ -260,6 +273,13 @@ Request::ParseStatus Request::parseHeaders(const std::string& raw)
 
         std::string name = header.substr(0, colon);
         std::string value = header.substr(colon + 1);
+
+        if (toLowerCase(name) == "host")
+        {
+            if (hasHost || value.empty())
+                return (INVALID);
+            hasHost = true;
+        }
 
         while (!value.empty() && (value[0] == ' ' || value[0] == '\t'))
             value.erase(0, 1);
@@ -298,6 +318,9 @@ Request::ParseStatus Request::parseHeaders(const std::string& raw)
         pos = end + 1;
     }
 
+    if (_version == "HTTP/1.1" && !hasHost)
+        return (INVALID);
+        
     if (_hasContentLength && _isChunked)
         return (INVALID);
 

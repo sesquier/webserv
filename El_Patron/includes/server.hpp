@@ -6,7 +6,7 @@
 /*   By: ale-coss <ale-coss@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/10/22 16:51:39 by ale-coss          #+#    #+#             */
-/*   Updated: 2026/10/29 15:48:34 by ale-coss         ###   ########.fr       */
+/*   Updated: 2026/11/09 18:40:48 by ale-coss         ###   ########.fr       */
 /*                                                                            */
 /******************************************************************************/
 
@@ -44,6 +44,7 @@ class Server
 
 		std::map<int, std::string> _clients;
 		std::map<int, ClientState> _clientStates;
+		std::map<int, bool> _requestStarted;
 
 		std::map<int, std::string> _responses;
 		std::map<int, std::string::size_type> _bytesSent; // contient le nombre d'octets deja envoyes
@@ -59,6 +60,8 @@ class Server
 		void queueResponse(int clientFd, const std::string& response);
 		void enableWriteEvent(int clientFd);
 		void handleClientWrite(int clientfd);
+
+		void handleEvent(const struct epoll_event& event);
 
 		// handlers.cpp: building the response of a parsed request
 		std::string handleRequest(const Request& request, const ServerConfig& server) const;
