@@ -6,7 +6,7 @@
 /*   By: ale-coss <ale-coss@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/10/25 17:34:25 by ale-coss          #+#    #+#             */
-/*   Updated: 2026/11/09 16:05:13 by ale-coss         ###   ########.fr       */
+/*   Updated: 2026/11/10 15:19:03 by ale-coss         ###   ########.fr       */
 /*                                                                            */
 /******************************************************************************/
 
@@ -130,23 +130,6 @@ static Request::ParseStatus decodeChunkedBody(const std::string& raw, std::strin
 
                 trailerPos = end + 2;
             }
-
-            // while (trailerPos < trailers.size())
-            // {
-            //     std::string::size_type end = trailers.find("\r\n", trailerPos);
-
-            //     if (end == std::string::npos)
-            //         end = trailers.size();
-
-            //     std::string trailer = trailers.substr(trailerPos, end - trailerPos);
-
-            //     std::string::size_type colon = trailer.find(':');
-
-            //     if (colon == std::string::npos || colon == 0)
-            //         return (Request::INVALID);
-
-            //     trailerPos = end + 2;
-            // }
 
             return (Request::COMPLETE);
         }
@@ -352,157 +335,6 @@ Request::ParseStatus Request::parseBody(const std::string& raw, std::string::siz
 
     return (COMPLETE);
 }
-
-
-
-
-// Request::ParseStatus Request::parse(const std::string& raw, std::string::size_type maxBodySize)
-// {
-//     _method.clear();
-//     _target.clear();
-//     _version.clear();
-//     _body.clear();
-//     _hasContentLength = false;
-//     _isChunked = false;
-//     _contentLength = 0;
-//     _bodyStart = 0;
-//     // Accept CRLF CRLF or LF LF as the end of headers.
-//     std::string::size_type headersEnd =
-//         raw.find("\r\n\r\n");
-//     std::string::size_type separatorSize = 4;
-
-//     // Keep the first separator: the body may contain the other one.
-//     std::string::size_type lfHeadersEnd = raw.find("\n\n");
-
-//     if (lfHeadersEnd < headersEnd)
-//     {
-//         headersEnd = lfHeadersEnd;
-//         separatorSize = 2;
-//     }
-
-//     if (headersEnd == std::string::npos)
-//     {
-//         if (raw.size() >= MAX_HEADERS_SIZE)
-//             return (HEADERS_TOO_LARGE);
-//         return (INCOMPLETE);
-//     }
-//     if (headersEnd > MAX_HEADERS_SIZE)
-//         return (HEADERS_TOO_LARGE);
-
-//     std::string headers = raw.substr(0, headersEnd);
-//     // Locate the end of the request line.
-//     std::string::size_type lineEnd = headers.find('\n');
-
-//     // No '\n' means a request without any header, which HTTP/1.0 allows.
-//     std::string line = headers.substr(0, lineEnd);
-
-//     // Remove a trailing carriage return if present.
-//     if (!line.empty() && line[line.size() - 1] == '\r')
-//         line.erase(line.size() - 1);
-
-//     std::string::size_type firstSpace = line.find(' ');
-//     if (firstSpace == std::string::npos)
-//         return (INVALID);
-
-//     std::string::size_type secondSpace =
-//         line.find(' ', firstSpace + 1);
-
-//     if (secondSpace == std::string::npos)
-//         return (INVALID);
-
-//     _method = line.substr(0, firstSpace);
-//     _target = line.substr(firstSpace + 1, secondSpace - firstSpace - 1);
-//     _version = line.substr(secondSpace + 1);
-
-//     if (_method.empty() || _target.empty() || _version.empty() || _version.find(' ') != std::string::npos)
-//         return (INVALID);
-
-//     if (_version != "HTTP/1.0" && _version != "HTTP/1.1")
-//         return (INVALID);
-    
-//     std::string::size_type contentLength = 0;
-
-//     bool hasContentLength = false;
-//     bool hasTransferEncoding = false;
-
-//     std::string::size_type pos = headers.size();
-
-//     if (lineEnd != std::string::npos)
-//         pos = lineEnd + 1;
-
-//     while (pos < headers.size())
-//     {
-//         std::string::size_type end = headers.find('\n', pos);
-
-//         if (end == std::string::npos)
-//             end = headers.size();
-
-//         std::string header = headers.substr(pos, end - pos);
-//         if (!header.empty() && header[header.size() - 1] == '\r')
-//             header.erase(header.size() - 1);
-
-//         std::string::size_type colon = header.find(':');
-
-//         if (colon == std::string::npos || colon == 0)
-//             return INVALID;
-
-//         std::string name = header.substr(0, colon);
-
-//         std::string value = header.substr(colon + 1);
-
-//         while (!value.empty() && (value[0] == ' ' || value[0] == '\t'))
-//             value.erase(0, 1);
-
-//         while (!value.empty() && (value[value.size() - 1] == ' ' || value[value.size() - 1] == '\t'))
-//             value.erase(value.size() - 1);
-
-//         if (toLowerCase(name) == "content-length")
-//         {
-//             if (hasContentLength || value.empty())
-//                 return INVALID;
-//             _hasContentLength = true;
-
-//             contentLength = 0;
-
-//             for (std::string::size_type i = 0; i < value.size(); ++i)
-//             {
-//                 if (value[i] < '0' || value[i] > '9')
-//                     return INVALID;
-
-//                 std::string::size_type digit = value[i] - '0';
-//                 if (contentLength > ((std::string::size_type)-1 - digit) / 10)
-//                     return (BODY_TOO_LARGE);
-//                 contentLength = contentLength * 10 + digit;
-//             }
-
-//             if (contentLength > maxBodySize)
-//                 return (BODY_TOO_LARGE);
-
-//             hasContentLength = true;
-//         }
-//         else if (toLowerCase(name) == "transfer-encoding")
-//         {
-//             if (hasTransferEncoding || toLowerCase(value) != "chunked")
-//                 return (INVALID);
-//             hasTransferEncoding = true;
-//             _isChunked = true;
-//         }
-//         pos = end + 1;
-//     }
-
-//     // std::string::size_type bodyStart = headersEnd + separatorSize;
-//     if (hasContentLength && hasTransferEncoding)
-//         return (INVALID);
-    
-//     std::string::size_type bodyStart = headersEnd + separatorSize;
-//     std::string::size_type availableBodySize = raw.size() - bodyStart;
-
-//     if (availableBodySize < contentLength)
-//         return INCOMPLETE;
-
-//     _body = raw.substr(bodyStart, contentLength);
-//     return COMPLETE;
-// }
 
 const std::string& Request::getMethod() const
 {
