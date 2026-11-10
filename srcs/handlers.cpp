@@ -3,6 +3,7 @@
 
 #include "server.hpp"
 #include "request.hpp"
+#include "cgi.hpp"
 #include <sys/stat.h>
 #include <dirent.h>
 #include <fcntl.h>
@@ -301,6 +302,9 @@ static std::string reasonPhrase(int code)
 {
 	switch (code)
 	{
+		case 200: return ("OK");
+		case 201: return ("Created");
+		case 302: return ("Found");
 		case 400: return ("Bad Request");
 		case 403: return ("Forbidden");
 		case 404: return ("Not Found");
@@ -311,6 +315,8 @@ static std::string reasonPhrase(int code)
 		case 431: return ("Request Header Fields Too Large");
 		case 500: return ("Internal Server Error");
 		case 501: return ("Not Implemented");
+		case 502: return ("Bad Gateway");
+		case 504: return ("Gateway Timeout");
 	}
 	return ("Error");
 }
@@ -471,6 +477,22 @@ std::string Server::handleCgi(const Request& request, const std::string& scriptP
 	(void)request;
 	(void)interpreter;
 	return (buildError(501, &location));
+}
+
+// The response from what the script wrote: its status, its headers, its body.
+// 502 Bad Gateway when the output does not follow CGI: the server in front
+// (webserv) got a bad answer from the program behind it.
+std::string Server::cgiResponse(const std::string& output, const LocationConfig& location) const
+{
+	CgiOutput result;
+
+	if (!parseCgiOutput(output, result))
+		return (buildError(502, &location));
+	if (result.reason.empty())
+		result.reason = reasonPhrase(result.status);
+	if (result.contentType.empty())
+		result.contentType = "text/plain";
+	return (buildResponse(result.status, result.reason, result.body, result.contentType, result.headers));
 }
 
 // The page of the location's error_page for this code if it can be read,
