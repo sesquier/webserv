@@ -68,6 +68,8 @@ class Server
 		std::string serveFile(const std::string& filePath, const LocationConfig& location) const;
 		std::string handlePost(const Request& request, const std::string& path, const LocationConfig& location) const;
 		std::string handleDelete(const std::string& path, const LocationConfig& location) const;
+		std::string handleCgi(const Request& request, const std::string& scriptPath,
+			const std::string& interpreter, const LocationConfig& location) const;
 		std::string buildResponse(int statusCode, const std::string& reason, const std::string& body,
 			const std::string& contentType = "text/plain", const std::string& extraHeaders = "") const;
 		std::string buildError(int code, const LocationConfig* location,

@@ -143,14 +143,20 @@ static std::string encodePath(const std::string& path)
 	return (encoded);
 }
 
-static std::string contentTypeFor(const std::string& filePath)
+// "./www/site1/hello.py" -> ".py". Empty if the file name has no extension:
+// a '.' in a directory name ("./www/v1.2/README") does not count.
+static std::string fileExtension(const std::string& filePath)
 {
 	std::string::size_type dotPos = filePath.find_last_of('.');
 
 	if (dotPos == std::string::npos || filePath.find('/', dotPos) != std::string::npos)
-		return ("application/octet-stream");
+		return ("");
+	return (filePath.substr(dotPos));
+}
 
-	std::string extension = filePath.substr(dotPos);
+static std::string contentTypeFor(const std::string& filePath)
+{
+	std::string extension = fileExtension(filePath);
 
 	if (extension == ".html" || extension == ".htm")
 		return ("text/html");
@@ -171,6 +177,17 @@ static std::string contentTypeFor(const std::string& filePath)
 	if (extension == ".svg")
 		return ("image/svg+xml");
 	return ("application/octet-stream");
+}
+
+// The interpreter that runs this file, from the location's "cgi" directives
+// (".py" -> "/usr/bin/python3"). Empty: the file is not a CGI script here.
+static std::string cgiInterpreter(const std::string& filePath, const LocationConfig& location)
+{
+	std::map<std::string, std::string>::const_iterator it = location.cgi.find(fileExtension(filePath));
+
+	if (it == location.cgi.end())
+		return ("");
+	return (it->second);
 }
 
 static std::string redirectReason(int code)
@@ -330,6 +347,15 @@ std::string Server::handleRequest(const Request& request, const ServerConfig& se
 			"text/plain", "Location: " + location.redirectUrl + "\r\n"));
 	if (!location.isMethodAllowed(method))
 		return (buildError(405, &location, "Allow: " + allowedMethods(location) + "\r\n"));
+	// A script of a CGI location is run, never sent or overwritten.
+	if (method == "GET" || method == "POST")
+	{
+		std::string scriptPath = resolvePath(location, path);
+		std::string interpreter = cgiInterpreter(scriptPath, location);
+
+		if (!interpreter.empty())
+			return (handleCgi(request, scriptPath, interpreter, location));
+	}
 	if (method == "GET")
 		return (handleGet(path, location));
 	if (method == "POST")
@@ -429,6 +455,22 @@ std::string Server::handleDelete(const std::string& path, const LocationConfig& 
 	if (unlink(filePath.c_str()) == -1)
 		return (buildError(500, &location));
 	return (buildResponse(204, "No Content", ""));
+}
+
+// Runs scriptPath with interpreter and sends back what the script writes.
+// For now it only checks the script: launching it comes in the next steps.
+std::string Server::handleCgi(const Request& request, const std::string& scriptPath,
+	const std::string& interpreter, const LocationConfig& location) const
+{
+	struct stat info;
+
+	if (stat(scriptPath.c_str(), &info) == -1 || !S_ISREG(info.st_mode))
+		return (buildError(404, &location));
+	if (access(scriptPath.c_str(), R_OK) == -1)
+		return (buildError(403, &location));
+	(void)request;
+	(void)interpreter;
+	return (buildError(501, &location));
 }
 
 // The page of the location's error_page for this code if it can be read,
