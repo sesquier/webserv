@@ -39,6 +39,34 @@ static std::string fileName(const std::string& path)
 	return (path.substr(path.find_last_of('/') + 1));
 }
 
+// "user-agent" -> "HTTP_USER_AGENT". Empty for a header that must not
+// become a variable:
+// - its own variable already: Content-Type, Content-Length;
+// - "proxy": HTTP_PROXY is read by many programs as their proxy setting, so a
+//   client could redirect the script's own requests (the "httpoxy" attack);
+// - a name with something else than letters, digits and '-': "X_Foo" would
+//   give the same variable as "X-Foo", a client could fake a header.
+static std::string headerVariable(const std::string& name)
+{
+	if (name == "content-type" || name == "content-length" || name == "proxy")
+		return ("");
+
+	std::string variable = "HTTP_";
+
+	for (std::string::size_type i = 0; i < name.size(); i++)
+	{
+		unsigned char c = static_cast<unsigned char>(name[i]);
+
+		if (c == '-')
+			variable += '_';
+		else if (std::isalnum(c))
+			variable += static_cast<char>(std::toupper(c));
+		else
+			return ("");
+	}
+	return (variable);
+}
+
 std::vector<std::string> buildCgiEnv(const Request& request, const std::string& urlPath,
 	const std::string& scriptPath, const ListenAddress& address)
 {
@@ -57,6 +85,21 @@ std::vector<std::string> buildCgiEnv(const Request& request, const std::string& 
 	// The body arrives on stdin; its size tells the script how much to read.
 	if (request.getMethod() == "POST")
 		env.push_back("CONTENT_LENGTH=" + numberToString(request.getBody().size()));
+
+	// The headers: the type of the body, then every header as HTTP_<NAME>
+	// ("Cookie: id=42" -> HTTP_COOKIE=id=42).
+	const std::map<std::string, std::string>&	headers = request.getHeaders();
+	std::map<std::string, std::string>::const_iterator	it = headers.find("content-type");
+
+	if (it != headers.end())
+		env.push_back("CONTENT_TYPE=" + it->second);
+	for (it = headers.begin(); it != headers.end(); ++it)
+	{
+		std::string variable = headerVariable(it->first);
+
+		if (!variable.empty())
+			env.push_back(variable + "=" + it->second);
+	}
 
 	// The server that runs the script.
 	env.push_back("GATEWAY_INTERFACE=CGI/1.1");
