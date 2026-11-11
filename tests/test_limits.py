@@ -5,7 +5,8 @@ import time
 HOST = "127.0.0.1"
 PORT = 8080
 
-MAX_BODY_SIZE = 1024 * 1024
+# client_max_body_size of the /upload location in config/default.conf
+UPLOAD_MAX_BODY_SIZE = 10 * 1024 * 1024
 MAX_HEADERS_SIZE = 16 * 1024
 
 passed = 0
@@ -75,7 +76,7 @@ def main():
 	print("\n========== HTTP SIZE LIMIT TESTS ==========\n")
 
 # Test 1 : corps trop volumineux.
-	body = b"A" * (MAX_BODY_SIZE + 1)
+	body = b"A" * (UPLOAD_MAX_BODY_SIZE + 1)
 
 	request = (
 		b"POST /upload/oversized-test.txt HTTP/1.1\r\n"

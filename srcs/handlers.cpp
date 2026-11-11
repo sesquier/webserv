@@ -97,7 +97,7 @@ static int hexValue(char c)
 // "%20" -> ' ': a URL encodes every special character as '%' and two hex digits.
 // Returns false on a malformed '%' or on "%00", which would cut the path short
 // once it is given to a C function.
-static bool decodePath(const std::string& encoded, std::string& decoded)
+bool decodePath(const std::string& encoded, std::string& decoded)
 {
 	for (std::string::size_type i = 0; i < encoded.size(); i++)
 	{
@@ -430,7 +430,7 @@ std::string Server::handlePost(const Request& request, const std::string& path,
 {
 	if (location.uploadStore.empty())
 		return (buildError(403, &location));
-	if (!request.hasContentLength())
+	if (!request.hasBodyFraming())
 		return (buildError(411, &location));
 
 	std::string filename = path.substr(location.path.size());
