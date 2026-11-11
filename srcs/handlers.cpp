@@ -336,7 +336,10 @@ static std::string defaultErrorPage(int code, const std::string& reason)
 
 // Applies the rules shared by every method, then chooses the handler.
 // The order matters: unknown method, redirection, then allowed methods.
-std::string Server::handleRequest(const Request& request, const ServerConfig& server) const
+// A request for a script returns no response: it fills cgi, and the network
+// loop runs the script.
+std::string Server::handleRequest(const Request& request, const ServerConfig& server,
+	CgiRequest& cgi) const
 {
 	const std::string&	method = request.getMethod();
 	std::string			path;
@@ -355,14 +358,9 @@ std::string Server::handleRequest(const Request& request, const ServerConfig& se
 	if (!location.isMethodAllowed(method))
 		return (buildError(405, &location, "Allow: " + allowedMethods(location) + "\r\n"));
 	// A script of a CGI location is run, never sent or overwritten.
-	if (method == "GET" || method == "POST")
-	{
-		std::string scriptPath = resolvePath(location, path);
-		std::string interpreter = cgiInterpreter(scriptPath, location);
-
-		if (!interpreter.empty())
-			return (handleCgi(request, scriptPath, interpreter, location));
-	}
+	if ((method == "GET" || method == "POST")
+		&& !cgiInterpreter(resolvePath(location, path), location).empty())
+		return (handleCgi(request, path, server, location, cgi));
 	if (method == "GET")
 		return (handleGet(path, location));
 	if (method == "POST")
@@ -464,20 +462,27 @@ std::string Server::handleDelete(const std::string& path, const LocationConfig& 
 	return (buildResponse(204, "No Content", ""));
 }
 
-// Runs scriptPath with interpreter and sends back what the script writes.
-// For now it only checks the script: launching it comes in the next steps.
-std::string Server::handleCgi(const Request& request, const std::string& scriptPath,
-	const std::string& interpreter, const LocationConfig& location) const
+// Checks the script, then fills cgi with everything needed to run it.
+// Returns an error response, or "" when the script must be run.
+std::string Server::handleCgi(const Request& request, const std::string& path,
+	const ServerConfig& server, const LocationConfig& location, CgiRequest& cgi) const
 {
-	struct stat info;
+	std::string	scriptPath = resolvePath(location, path);
+	struct stat	info;
 
 	if (stat(scriptPath.c_str(), &info) == -1 || !S_ISREG(info.st_mode))
 		return (buildError(404, &location));
 	if (access(scriptPath.c_str(), R_OK) == -1)
 		return (buildError(403, &location));
-	(void)request;
-	(void)interpreter;
-	return (buildError(501, &location));
+
+	cgi.pending = true;
+	cgi.interpreter = cgiInterpreter(scriptPath, location);
+	cgi.scriptPath = scriptPath;
+	// The parser requires a "listen" in every server: listens[0] exists.
+	cgi.env = buildCgiEnv(request, path, scriptPath, server.listens[0]);
+	cgi.body = request.getBody();
+	cgi.location = &location;
+	return ("");
 }
 
 // The response from what the script wrote: its status, its headers, its body.

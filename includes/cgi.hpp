@@ -13,6 +13,20 @@ class Request;
 std::vector<std::string>	buildCgiEnv(const Request& request, const std::string& urlPath,
 								const std::string& scriptPath, const ListenAddress& address);
 
+// A request that a script must answer: handleRequest fills it instead of
+// building a response, and the network loop starts the script from it.
+struct CgiRequest
+{
+	bool						pending;		// true: no response yet, run the script
+	std::string					interpreter;	// "/usr/bin/python3"
+	std::string					scriptPath;		// "./www/site1/cgi-bin/hello.py"
+	std::vector<std::string>	env;
+	std::string					body;			// written to the script's stdin
+	const LocationConfig*		location;		// for the error pages
+
+	CgiRequest();
+};
+
 // A running script, seen from the server.
 struct CgiProcess
 {

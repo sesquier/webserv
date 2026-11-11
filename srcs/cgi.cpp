@@ -11,6 +11,10 @@
 #include <fcntl.h>
 #include <sys/wait.h>
 
+CgiRequest::CgiRequest() : pending(false), location(NULL)
+{
+}
+
 static std::string numberToString(size_t number)
 {
 	std::ostringstream text;
@@ -96,6 +100,11 @@ static void runScript(int toScript[2], int fromScript[2], const std::string& int
 	// a write end left open here would keep the server from ever seeing EOF.
 	closePipe(toScript);
 	closePipe(fromScript);
+	// The child also inherited every fd of the server: listening sockets, epoll,
+	// other clients. Left open, a client closed by the server would stay
+	// connected until the script ends. 1024 is the usual limit of open fds.
+	for (int fd = 3; fd < 1024; fd++)
+		close(fd);
 	if (chdir(directoryOf(scriptPath).c_str()) == -1)
 		std::exit(1);
 
