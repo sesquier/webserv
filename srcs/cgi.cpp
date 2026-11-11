@@ -5,6 +5,11 @@
 #include "request.hpp"
 #include <sstream>
 #include <cctype>
+#include <cstdlib>
+#include <csignal>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/wait.h>
 
 static std::string numberToString(size_t number)
 {
@@ -58,6 +63,100 @@ std::vector<std::string> buildCgiEnv(const Request& request, const std::string& 
 	// php-cgi refuses to run a script without it.
 	env.push_back("REDIRECT_STATUS=200");
 	return (env);
+}
+
+// "./www/site1/cgi-bin/hello.py" -> "./www/site1/cgi-bin".
+static std::string directoryOf(const std::string& path)
+{
+	std::string::size_type slash = path.find_last_of('/');
+
+	if (slash == std::string::npos)
+		return (".");
+	if (slash == 0)
+		return ("/");
+	return (path.substr(0, slash));
+}
+
+static void closePipe(int fds[2])
+{
+	close(fds[0]);
+	close(fds[1]);
+}
+
+// In the child, which never returns from here: plugs the pipes on stdin and
+// stdout, moves to the script's directory, then becomes the interpreter.
+// If anything fails, the child exits without writing: the server sees an
+// empty output and answers 502.
+static void runScript(int toScript[2], int fromScript[2], const std::string& interpreter,
+	const std::string& scriptPath, const std::vector<std::string>& env)
+{
+	if (dup2(toScript[0], STDIN_FILENO) == -1 || dup2(fromScript[1], STDOUT_FILENO) == -1)
+		std::exit(1);
+	// stdin and stdout are the pipes now: the original fds are not needed, and
+	// a write end left open here would keep the server from ever seeing EOF.
+	closePipe(toScript);
+	closePipe(fromScript);
+	if (chdir(directoryOf(scriptPath).c_str()) == -1)
+		std::exit(1);
+
+	// execve wants NULL-terminated arrays of C strings:
+	// argv = { "/usr/bin/python3", "hello.py", NULL }, envp = { "NAME=value", ..., NULL }.
+	std::string			script = fileName(scriptPath);
+	std::vector<char*>	argv;
+	std::vector<char*>	envp;
+
+	argv.push_back(const_cast<char*>(interpreter.c_str()));
+	argv.push_back(const_cast<char*>(script.c_str()));
+	argv.push_back(NULL);
+	for (size_t i = 0; i < env.size(); i++)
+		envp.push_back(const_cast<char*>(env[i].c_str()));
+	envp.push_back(NULL);
+
+	execve(interpreter.c_str(), &argv[0], &envp[0]);
+	std::exit(1);	// only reached if execve failed
+}
+
+bool startCgi(const std::string& interpreter, const std::string& scriptPath,
+	const std::vector<std::string>& env, CgiProcess& process)
+{
+	int toScript[2];	// server -> script: the body, on the script's stdin
+	int fromScript[2];	// script -> server: the output, from the script's stdout
+
+	if (pipe(toScript) == -1)
+		return (false);
+	if (pipe(fromScript) == -1)
+	{
+		closePipe(toScript);
+		return (false);
+	}
+
+	pid_t pid = fork();
+
+	if (pid == -1)
+	{
+		closePipe(toScript);
+		closePipe(fromScript);
+		return (false);
+	}
+	if (pid == 0)
+		runScript(toScript, fromScript, interpreter, scriptPath, env);
+
+	// The parent keeps one end of each pipe: it writes the body, reads the output.
+	close(toScript[0]);
+	close(fromScript[1]);
+	if (fcntl(toScript[1], F_SETFL, O_NONBLOCK) == -1
+		|| fcntl(fromScript[0], F_SETFL, O_NONBLOCK) == -1)
+	{
+		close(toScript[1]);
+		close(fromScript[0]);
+		kill(pid, SIGKILL);
+		waitpid(pid, NULL, 0);
+		return (false);
+	}
+	process.pid = pid;
+	process.inputFd = toScript[1];
+	process.outputFd = fromScript[0];
+	return (true);
 }
 
 static bool isDigit(char c)

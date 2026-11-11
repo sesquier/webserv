@@ -3,6 +3,7 @@
 
 #include <string>
 #include <vector>
+#include <sys/types.h>
 #include "config/ServerConfig.hpp"
 
 class Request;
@@ -11,6 +12,20 @@ class Request;
 // script must know about the request, except the body, which goes on stdin.
 std::vector<std::string>	buildCgiEnv(const Request& request, const std::string& urlPath,
 								const std::string& scriptPath, const ListenAddress& address);
+
+// A running script, seen from the server.
+struct CgiProcess
+{
+	pid_t	pid;
+	int		inputFd;	// write the request body here: it is the script's stdin
+	int		outputFd;	// read the script's stdout here, until EOF
+};
+
+// Starts "interpreter script" in the script's directory, with env as its
+// environment. Both fds are non-blocking, for epoll. Returns false if the
+// pipes or the process cannot be created (the server then answers 500).
+bool						startCgi(const std::string& interpreter, const std::string& scriptPath,
+								const std::vector<std::string>& env, CgiProcess& process);
 
 // What the script wrote, split into the parts of an HTTP response.
 struct CgiOutput
