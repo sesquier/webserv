@@ -1,0 +1,1 @@
+Contenu de data.txt : le script tourne bien dans le dossier cgi-bin.
