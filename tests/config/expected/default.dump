@@ -32,7 +32,9 @@ server #1
         client_max_body_size: 1048576
         methods: GET POST
         autoindex: off
+        cgi: .pl -> /usr/bin/perl
         cgi: .py -> /usr/bin/python3
+        cgi: .sh -> /bin/bash
         error_page: 404 -> ./www/site1/errors/404.html
     location /old
         root: ./www/site1 (inherited)
