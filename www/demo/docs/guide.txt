@@ -1,0 +1,1 @@
+Un fichier dans /docs, dossier listé par autoindex.
