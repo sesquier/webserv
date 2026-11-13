@@ -14,6 +14,7 @@
 #define REQUEST_HPP
 
 #include <string>
+#include <map>
 
 class Request
 {
@@ -39,6 +40,8 @@ class Request
 		const std::string& getTarget() const;
 		const std::string& getVersion() const;
 		const std::string& getBody() const;
+		// Every header, the name in lower case: "content-type" -> "text/html".
+		const std::map<std::string, std::string>& getHeaders() const;
 
 		bool hasContentLength() const;
 		bool hasBodyFraming() const;
@@ -49,6 +52,7 @@ class Request
 		std::string _target;
 		std::string _version;
 		std::string _body;
+		std::map<std::string, std::string> _headers;
 
 		bool _hasContentLength;
 		bool _isChunked;

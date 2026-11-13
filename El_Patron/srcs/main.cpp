@@ -14,6 +14,7 @@
 #include "config/Config.hpp"
 #include <iostream>
 #include <exception>
+#include <csignal>
 
 int main(int argc, char** argv)
 {
@@ -22,6 +23,9 @@ int main(int argc, char** argv)
 		std::cerr << "usage: " << argv[0] << " [configuration file]" << std::endl;
 		return (1);
 	}
+	// Writing to a pipe whose script has exited would send SIGPIPE, which
+	// kills the server: ignored, write then just returns -1.
+	signal(SIGPIPE, SIG_IGN);
 	try
 	{
 		// Declared first: the Server keeps pointers to these objects until the end.

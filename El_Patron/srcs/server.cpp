@@ -19,6 +19,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <cstring>
+#include <cerrno>
 #include <iostream>
 #include <stdexcept>
 #include <sstream>
@@ -52,6 +53,14 @@ static std::string addressToString(const ListenAddress& address)
 	return (text.str());
 }
 
+// An error found before the request is routed (unreadable request, idle
+// client) uses the error pages of the server's "/" location: it inherits
+// the error_page directives of the server block.
+static const LocationConfig* defaultLocation(const ServerConfig* server)
+{
+	return (&server->findLocation("/"));
+}
+
 Server::Server(const std::vector<ServerConfig>& configs) : _epollFd(-1), _configs(configs)
 {
 	_epollFd = epoll_create(1);
@@ -61,6 +70,8 @@ Server::Server(const std::vector<ServerConfig>& configs) : _epollFd(-1), _config
 
 Server::~Server()
 {
+	while (!_cgiJobs.empty())
+		abortCgiJob(_cgiJobs.begin()->first);
 	for (std::map<int, const ServerConfig*>::iterator it = _listeners.begin(); it != _listeners.end(); ++it)
 		close(it->first);
 	if (_epollFd != -1)
@@ -120,7 +131,9 @@ void Server::run()
 
     while (true)
     {
-        int count = epoll_wait(_epollFd, events, 10, 1000);
+        // While scripts run, wake up often: checkCgiJobs collects the ones
+        // that have just exited and stops the ones that are too slow.
+        int count = epoll_wait(_epollFd, events, 10, _cgiJobs.empty() ? 1000 : 50);
 
         if (count == -1)
         {
@@ -151,6 +164,9 @@ void Server::run()
         }
 
         std::time_t now = std::time(NULL);
+
+        checkCgiJobs(now);
+
         std::map<int, std::time_t>::iterator activityIt = _lastActivity.begin();
 
         while (activityIt != _lastActivity.end())
@@ -159,6 +175,10 @@ void Server::run()
             std::time_t lastActivity = activityIt->second;
 
             ++activityIt;
+
+            // A client waiting for its script is under the CGI timeout instead.
+            if (_cgiJobs.count(clientFd))
+                continue;
 
             if (now - lastActivity >= 30)
             {
@@ -174,7 +194,7 @@ void Server::run()
                     {
                         queueResponse(
                             clientFd,
-                            buildResponse(408, "Request Timeout", "408 Request Timeout\n")
+                            buildError(408, defaultLocation(_clientServers[clientFd]))
                         );
                     }
                     catch (...)
@@ -243,6 +263,13 @@ void Server::handleEvent(const struct epoll_event& event)
 			return;
 		}
 
+		// A pipe of a running script, not a client socket.
+		if (_cgiPipes.count(fd))
+		{
+			handleCgiEvent(fd);
+			return ;
+		}
+
 		if (event.events & EPOLLERR)
         {
             closeClient(fd);
@@ -267,6 +294,13 @@ void Server::handleEvent(const struct epoll_event& event)
         {
             if (event.events & EPOLLOUT)
                 handleClientWrite(fd);
+            return ;
+        }
+
+        // Waiting for its script, a client is only watched for leaving.
+        if (stateIt->second == CGI_RUNNING)
+        {
+            closeClient(fd);
             return ;
         }
 
@@ -308,13 +342,13 @@ void Server::handleEvent(const struct epoll_event& event)
 
 		if (parseStatus == Request::INVALID)
 		{
-			queueResponse(fd, buildResponse(400, "Bad Request", "400 Bad Request\n"));
+			queueResponse(fd, buildError(400, defaultLocation(_clientServers[fd])));
 			return ;
 		}
 
 		if (parseStatus == Request::HEADERS_TOO_LARGE)
 		{
-			queueResponse(fd, buildResponse(431, "Request Header Fields Too Large", "431 Request Header Fields Too Large\n"));
+			queueResponse(fd, buildError(431, defaultLocation(_clientServers[fd])));
 			return ;
 		}
 
@@ -328,7 +362,7 @@ void Server::handleEvent(const struct epoll_event& event)
 
 		if (!decodePath(path, decodedPath))
 		{
-			queueResponse(fd, buildResponse(400, "Bad Request", "400 Bad Request\n"));
+			queueResponse(fd, buildError(400, defaultLocation(_clientServers[fd])));
 			return ;
 		}
 
@@ -343,13 +377,13 @@ void Server::handleEvent(const struct epoll_event& event)
 
 		if (parseStatus == Request::INVALID)
 		{
-			queueResponse(fd, buildResponse(400, "Bad Request", "400 Bad Request\n"));
+			queueResponse(fd, buildError(400, &location));
 			return ;
 		}
 
 		if (parseStatus == Request::BODY_TOO_LARGE)
 		{
-			queueResponse(fd, buildResponse(413, "Content Too Large", "413 Content Too Large\n"));
+			queueResponse(fd, buildError(413, &location));
 			return ;
 		}
 
@@ -357,7 +391,14 @@ void Server::handleEvent(const struct epoll_event& event)
 			<< request.getVersion() << " (server root: " << _clientServers[fd]->root << ")"
 			<< std::endl;
 
-		std::string response = handleRequest(request, *_clientServers[fd]);
+		CgiRequest cgi;
+		std::string response = handleRequest(request, *_clientServers[fd], cgi);
+
+		if (cgi.pending)
+		{
+			startCgiJob(fd, cgi);
+			return ;
+		}
 
 		try
 		{
@@ -382,6 +423,7 @@ void Server::handleEvent(const struct epoll_event& event)
 
 void Server::closeClient(int clientFd)
 {
+	abortCgiJob(clientFd);
 	epoll_ctl(_epollFd, EPOLL_CTL_DEL, clientFd, NULL);
 	close(clientFd);
 	_clients.erase(clientFd);

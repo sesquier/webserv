@@ -164,6 +164,7 @@ Request::ParseStatus Request::parseHeaders(const std::string& raw)
     _target.clear();
     _version.clear();
     _body.clear();
+    _headers.clear();
 
     _hasContentLength = false;
     _isChunked = false;
@@ -270,6 +271,11 @@ Request::ParseStatus Request::parseHeaders(const std::string& raw)
         while (!value.empty() && (value[value.size() - 1] == ' ' || value[value.size() - 1] == '\t'))
             value.erase(value.size() - 1);
 
+        // A header sent twice is one header with both values, comma-separated.
+        std::string& stored = _headers[toLowerCase(name)];
+
+        stored = stored.empty() ? value : stored + ", " + value;
+
         if (toLowerCase(name) == "content-length")
         {
             if (_hasContentLength || value.empty())
@@ -354,6 +360,11 @@ const std::string& Request::getVersion() const
 const std::string& Request::getBody() const
 {
 	return (_body);
+}
+
+const std::map<std::string, std::string>& Request::getHeaders() const
+{
+    return (_headers);
 }
 
 bool Request::hasContentLength() const

@@ -16,5 +16,19 @@
         <li><a href="/files/">Dossier /files</a> : un dossier sans page d'accueil.</li>
         <li><a href="http://localhost:8081/">Site 2</a> : un autre site, sur le port 8081.</li>
     </ul>
+
+    <h2>CGI : des pages fabriquées par un script</h2>
+    <ul>
+        <li><a href="/cgi-bin/hello.py?name=Bob">hello.py</a>, <a href="/cgi-bin/hello.pl?name=Bob">hello.pl</a>,
+            <a href="/cgi-bin/hello.sh?name=Bob">hello.sh</a> : le même script en Python, Perl et Bash.</li>
+        <li><a href="/cgi-bin/env.py?exemple=1">env.py</a> : tout ce que le script reçoit de webserv.</li>
+        <li><a href="/cgi-bin/readfile.py">readfile.py</a> : lit un fichier par chemin relatif.</li>
+        <li><a href="/cgi-bin/error.py">error.py</a> : un script qui plante (502).</li>
+        <li><a href="/cgi-bin/loop.py">loop.py</a> : une boucle infinie (504 après 10 s, le site reste utilisable).</li>
+    </ul>
+    <form method="post" action="/cgi-bin/hello.py">
+        <input name="name" placeholder="Ton prénom">
+        <button>Envoyer en POST</button>
+    </form>
 </body>
 </html>

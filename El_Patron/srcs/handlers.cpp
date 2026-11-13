@@ -3,6 +3,7 @@
 
 #include "server.hpp"
 #include "request.hpp"
+#include "cgi.hpp"
 #include <sys/stat.h>
 #include <dirent.h>
 #include <fcntl.h>
@@ -10,8 +11,6 @@
 #include <sstream>
 #include <set>
 #include <cctype>
-//debug :
-// #include <iostream>
 
 static bool isValidUploadFilename(const std::string& filename)
 {
@@ -30,9 +29,13 @@ static bool isValidUploadFilename(const std::string& filename)
 
 static int saveUploadedFile(const std::string& filePath, const std::string& body)
 {
-    int fileFd = open(filePath.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0644);
-  
-	if (fileFd == -1)
+    int fileFd = open(
+        filePath.c_str(),
+        O_WRONLY | O_CREAT | O_EXCL,
+        0644
+    );
+
+    if (fileFd == -1)
     {
         struct stat fileInfo;
 
@@ -62,7 +65,7 @@ static int saveUploadedFile(const std::string& filePath, const std::string& body
         offset += static_cast<std::string::size_type>(bytesWritten);
     }
 
-	if (close(fileFd) == -1)
+    if (close(fileFd) == -1)
         writeError = true;
 
     if (writeError)
@@ -141,14 +144,20 @@ static std::string encodePath(const std::string& path)
 	return (encoded);
 }
 
-static std::string contentTypeFor(const std::string& filePath)
+// "./www/site1/hello.py" -> ".py". Empty if the file name has no extension:
+// a '.' in a directory name ("./www/v1.2/README") does not count.
+static std::string fileExtension(const std::string& filePath)
 {
 	std::string::size_type dotPos = filePath.find_last_of('.');
 
 	if (dotPos == std::string::npos || filePath.find('/', dotPos) != std::string::npos)
-		return ("application/octet-stream");
+		return ("");
+	return (filePath.substr(dotPos));
+}
 
-	std::string extension = filePath.substr(dotPos);
+static std::string contentTypeFor(const std::string& filePath)
+{
+	std::string extension = fileExtension(filePath);
 
 	if (extension == ".html" || extension == ".htm")
 		return ("text/html");
@@ -169,6 +178,17 @@ static std::string contentTypeFor(const std::string& filePath)
 	if (extension == ".svg")
 		return ("image/svg+xml");
 	return ("application/octet-stream");
+}
+
+// The interpreter that runs this file, from the location's "cgi" directives
+// (".py" -> "/usr/bin/python3"). Empty: the file is not a CGI script here.
+static std::string cgiInterpreter(const std::string& filePath, const LocationConfig& location)
+{
+	std::map<std::string, std::string>::const_iterator it = location.cgi.find(fileExtension(filePath));
+
+	if (it == location.cgi.end())
+		return ("");
+	return (it->second);
 }
 
 static std::string redirectReason(int code)
@@ -282,16 +302,22 @@ static std::string reasonPhrase(int code)
 {
 	switch (code)
 	{
+		case 200: return ("OK");
+		case 201: return ("Created");
+		case 302: return ("Found");
 		case 400: return ("Bad Request");
 		case 403: return ("Forbidden");
 		case 404: return ("Not Found");
 		case 405: return ("Method Not Allowed");
+		case 408: return ("Request Timeout");
 		case 409: return ("Conflict");
 		case 411: return ("Length Required");
 		case 413: return ("Content Too Large");
 		case 431: return ("Request Header Fields Too Large");
 		case 500: return ("Internal Server Error");
 		case 501: return ("Not Implemented");
+		case 502: return ("Bad Gateway");
+		case 504: return ("Gateway Timeout");
 	}
 	return ("Error");
 }
@@ -310,7 +336,10 @@ static std::string defaultErrorPage(int code, const std::string& reason)
 
 // Applies the rules shared by every method, then chooses the handler.
 // The order matters: unknown method, redirection, then allowed methods.
-std::string Server::handleRequest(const Request& request, const ServerConfig& server) const
+// A request for a script returns no response: it fills cgi, and the network
+// loop runs the script.
+std::string Server::handleRequest(const Request& request, const ServerConfig& server,
+	CgiRequest& cgi) const
 {
 	const std::string&	method = request.getMethod();
 	std::string			path;
@@ -328,6 +357,10 @@ std::string Server::handleRequest(const Request& request, const ServerConfig& se
 			"text/plain", "Location: " + location.redirectUrl + "\r\n"));
 	if (!location.isMethodAllowed(method))
 		return (buildError(405, &location, "Allow: " + allowedMethods(location) + "\r\n"));
+	// A script of a CGI location is run, never sent or overwritten.
+	if ((method == "GET" || method == "POST")
+		&& !cgiInterpreter(resolvePath(location, path), location).empty())
+		return (handleCgi(request, path, server, location, cgi));
 	if (method == "GET")
 		return (handleGet(path, location));
 	if (method == "POST")
@@ -427,6 +460,45 @@ std::string Server::handleDelete(const std::string& path, const LocationConfig& 
 	if (unlink(filePath.c_str()) == -1)
 		return (buildError(500, &location));
 	return (buildResponse(204, "No Content", ""));
+}
+
+// Checks the script, then fills cgi with everything needed to run it.
+// Returns an error response, or "" when the script must be run.
+std::string Server::handleCgi(const Request& request, const std::string& path,
+	const ServerConfig& server, const LocationConfig& location, CgiRequest& cgi) const
+{
+	std::string	scriptPath = resolvePath(location, path);
+	struct stat	info;
+
+	if (stat(scriptPath.c_str(), &info) == -1 || !S_ISREG(info.st_mode))
+		return (buildError(404, &location));
+	if (access(scriptPath.c_str(), R_OK) == -1)
+		return (buildError(403, &location));
+
+	cgi.pending = true;
+	cgi.interpreter = cgiInterpreter(scriptPath, location);
+	cgi.scriptPath = scriptPath;
+	// The parser requires a "listen" in every server: listens[0] exists.
+	cgi.env = buildCgiEnv(request, path, scriptPath, server.listens[0]);
+	cgi.body = request.getBody();
+	cgi.location = &location;
+	return ("");
+}
+
+// The response from what the script wrote: its status, its headers, its body.
+// 502 Bad Gateway when the output does not follow CGI: the server in front
+// (webserv) got a bad answer from the program behind it.
+std::string Server::cgiResponse(const std::string& output, const LocationConfig& location) const
+{
+	CgiOutput result;
+
+	if (!parseCgiOutput(output, result))
+		return (buildError(502, &location));
+	if (result.reason.empty())
+		result.reason = reasonPhrase(result.status);
+	if (result.contentType.empty())
+		result.contentType = "text/plain";
+	return (buildResponse(result.status, result.reason, result.body, result.contentType, result.headers));
 }
 
 // The page of the location's error_page for this code if it can be read,
