@@ -1,5 +1,12 @@
-// CGI: what webserv needs to run a script and send back what it writes.
-// The variables follow RFC 3875, the CGI standard.
+// ============================================================================
+// cgi.cpp : les briques du CGI, sans epoll.
+//
+//   buildCgiEnv     la requête traduite en variables d'environnement ;
+//   startCgi        pipe + fork + dup2 + chdir + execve ;
+//   parseCgiOutput  la sortie du script découpée en réponse HTTP.
+//
+// Les variables suivent la RFC 3875, le standard CGI.
+// ============================================================================
 
 #include "cgi.hpp"
 #include "request.hpp"
@@ -15,6 +22,7 @@ CgiRequest::CgiRequest() : pending(false), location(NULL)
 {
 }
 
+// Un nombre en texte (std::to_string n'existe pas en C++98).
 static std::string numberToString(size_t number)
 {
 	std::ostringstream text;
@@ -23,7 +31,7 @@ static std::string numberToString(size_t number)
 	return (text.str());
 }
 
-// "/cgi-bin/hello.py?name=Bob" -> "name=Bob". Empty without a '?'.
+// "/cgi-bin/hello.py?name=Bob" -> "name=Bob". Vide sans '?'.
 static std::string queryString(const std::string& target)
 {
 	std::string::size_type mark = target.find('?');
@@ -39,13 +47,14 @@ static std::string fileName(const std::string& path)
 	return (path.substr(path.find_last_of('/') + 1));
 }
 
-// "user-agent" -> "HTTP_USER_AGENT". Empty for a header that must not
-// become a variable:
-// - its own variable already: Content-Type, Content-Length;
-// - "proxy": HTTP_PROXY is read by many programs as their proxy setting, so a
-//   client could redirect the script's own requests (the "httpoxy" attack);
-// - a name with something else than letters, digits and '-': "X_Foo" would
-//   give the same variable as "X-Foo", a client could fake a header.
+// Nom de header -> nom de variable : "user-agent" -> "HTTP_USER_AGENT".
+// Renvoie "" pour un header qui ne doit PAS devenir une variable :
+// - Content-Type et Content-Length ont déjà leur propre variable ;
+// - "Proxy" : beaucoup de programmes lisent HTTP_PROXY comme leur réglage de
+//   proxy ; un client pourrait rediriger les requêtes du script vers lui
+//   (l'attaque "httpoxy") ;
+// - un nom avec autre chose que lettres, chiffres et '-' : "X_Foo" donnerait
+//   la même variable que "X-Foo", un client pourrait imiter un header.
 static std::string headerVariable(const std::string& name)
 {
 	if (name == "content-type" || name == "content-length" || name == "proxy")
@@ -67,26 +76,30 @@ static std::string headerVariable(const std::string& name)
 	return (variable);
 }
 
+// Le sujet : "the full request and arguments provided by the client must be
+// available to the CGI". Tout passe donc par l'environnement, sauf le body.
 std::vector<std::string> buildCgiEnv(const Request& request, const std::string& urlPath,
 	const std::string& scriptPath, const ListenAddress& address)
 {
 	std::vector<std::string> env;
 
-	// The request: method, protocol, and what follows the '?' in the URL.
+	// La requête : méthode, protocole, et ce qui suit le '?' dans l'URL.
 	env.push_back("REQUEST_METHOD=" + request.getMethod());
 	env.push_back("QUERY_STRING=" + queryString(request.getTarget()));
 	env.push_back("SERVER_PROTOCOL=" + request.getVersion());
 
-	// The script: its path in the URL, and its file. The script runs in its own
-	// directory, so the file is named from there: "hello.py".
+	// Le script : son chemin dans l'URL, et son fichier. Le script tourne
+	// dans son propre dossier (chdir), donc son fichier est nommé depuis là :
+	// "hello.py".
 	env.push_back("SCRIPT_NAME=" + urlPath);
 	env.push_back("SCRIPT_FILENAME=" + fileName(scriptPath));
 
-	// The body arrives on stdin; its size tells the script how much to read.
+	// Le body arrive sur stdin ; sa taille dit au script combien lire.
+	// Pour un body chunked, c'est la taille du body reconstitué.
 	if (request.getMethod() == "POST")
 		env.push_back("CONTENT_LENGTH=" + numberToString(request.getBody().size()));
 
-	// The headers: the type of the body, then every header as HTTP_<NAME>
+	// Les headers : le type du body, puis chaque header en HTTP_<NOM>
 	// ("Cookie: id=42" -> HTTP_COOKIE=id=42).
 	const std::map<std::string, std::string>&	headers = request.getHeaders();
 	std::map<std::string, std::string>::const_iterator	it = headers.find("content-type");
@@ -101,13 +114,14 @@ std::vector<std::string> buildCgiEnv(const Request& request, const std::string& 
 			env.push_back(variable + "=" + it->second);
 	}
 
-	// The server that runs the script.
+	// Le serveur qui lance le script.
 	env.push_back("GATEWAY_INTERFACE=CGI/1.1");
 	env.push_back("SERVER_SOFTWARE=webserv");
 	env.push_back("SERVER_NAME=" + address.host);
 	env.push_back("SERVER_PORT=" + numberToString(address.port));
 
-	// php-cgi refuses to run a script without it.
+	// php-cgi refuse de lancer un script sans elle (protection contre un
+	// appel direct). Inutile pour Python, mais sans danger.
 	env.push_back("REDIRECT_STATUS=200");
 	return (env);
 }
@@ -130,29 +144,41 @@ static void closePipe(int fds[2])
 	close(fds[1]);
 }
 
-// In the child, which never returns from here: plugs the pipes on stdin and
-// stdout, moves to the script's directory, then becomes the interpreter.
-// If anything fails, the child exits without writing: the server sees an
-// empty output and answers 502.
+// ----------------------------------------------------------------------------
+// Dans l'ENFANT, qui ne revient jamais d'ici : il branche les pipes sur stdin
+// et stdout, va dans le dossier du script, puis DEVIENT l'interpréteur.
+// Si une étape échoue, l'enfant quitte sans rien écrire : le serveur voit une
+// sortie vide et un code de sortie 1, et répond 502.
+// ----------------------------------------------------------------------------
 static void runScript(int toScript[2], int fromScript[2], const std::string& interpreter,
 	const std::string& scriptPath, const std::vector<std::string>& env)
 {
+	// dup2(a, b) : b devient une copie de a. Après ça, ce que le script lit
+	// sur stdin (fd 0) vient du pipe toScript, et ce qu'il écrit sur stdout
+	// (fd 1) part dans le pipe fromScript.
 	if (dup2(toScript[0], STDIN_FILENO) == -1 || dup2(fromScript[1], STDOUT_FILENO) == -1)
 		std::exit(1);
-	// stdin and stdout are the pipes now: the original fds are not needed, and
-	// a write end left open here would keep the server from ever seeing EOF.
+	// stdin et stdout SONT les pipes maintenant : les fds d'origine ne servent
+	// plus. Un bout d'écriture laissé ouvert ici empêcherait le serveur de
+	// voir EOF : un pipe n'est fini que quand TOUS ses bouts d'écriture sont
+	// fermés.
 	closePipe(toScript);
 	closePipe(fromScript);
-	// The child also inherited every fd of the server: listening sockets, epoll,
-	// other clients. Left open, a client closed by the server would stay
-	// connected until the script ends. 1024 is the usual limit of open fds.
+	// L'enfant a aussi hérité de TOUS les fds du serveur : sockets d'écoute,
+	// epoll, autres clients. Laissés ouverts, un client fermé par le serveur
+	// resterait connecté jusqu'à la fin du script. 1024 est la limite
+	// habituelle de fds ouverts par processus.
 	for (int fd = 3; fd < 1024; fd++)
 		close(fd);
+	// Le sujet : "the CGI should be run in the correct directory for relative
+	// path file access". Le script peut ouvrir "data.txt" à côté de lui.
 	if (chdir(directoryOf(scriptPath).c_str()) == -1)
 		std::exit(1);
 
-	// execve wants NULL-terminated arrays of C strings:
-	// argv = { "/usr/bin/python3", "hello.py", NULL }, envp = { "NAME=value", ..., NULL }.
+	// execve veut des tableaux de char* terminés par NULL :
+	// argv = { "/usr/bin/python3", "hello.py", NULL }
+	// envp = { "REQUEST_METHOD=GET", ..., NULL }
+	// const_cast : execve n'est pas déclaré const, mais ne modifie rien.
 	std::string			script = fileName(scriptPath);
 	std::vector<char*>	argv;
 	std::vector<char*>	envp;
@@ -164,16 +190,30 @@ static void runScript(int toScript[2], int fromScript[2], const std::string& int
 		envp.push_back(const_cast<char*>(env[i].c_str()));
 	envp.push_back(NULL);
 
+	// execve REMPLACE le programme du processus : en cas de succès, la ligne
+	// suivante n'est jamais exécutée.
 	execve(interpreter.c_str(), &argv[0], &envp[0]);
-	std::exit(1);	// only reached if execve failed
+	std::exit(1);	// atteint seulement si execve a échoué (interpréteur absent...)
 }
 
+// ----------------------------------------------------------------------------
+// startCgi : crée les deux pipes et le processus du script.
+//
+//   serveur                         script
+//   toScript[1]   --- body --->     toScript[0]   = son stdin
+//   fromScript[0] <-- sortie ---    fromScript[1] = son stdout
+//
+// fork est utilisé UNIQUEMENT ici : le sujet l'interdit ailleurs que pour le
+// CGI. Pourquoi fork ? execve remplace le processus qui l'appelle ; appelé
+// directement, webserv deviendrait Python. On le fait donc dans un enfant.
+// ----------------------------------------------------------------------------
 bool startCgi(const std::string& interpreter, const std::string& scriptPath,
 	const std::vector<std::string>& env, CgiProcess& process)
 {
-	int toScript[2];	// server -> script: the body, on the script's stdin
-	int fromScript[2];	// script -> server: the output, from the script's stdout
+	int toScript[2];	// serveur -> script : le body, sur le stdin du script
+	int fromScript[2];	// script -> serveur : la sortie, depuis son stdout
 
+	// Chaque erreur ferme ce qui a déjà été ouvert : aucune fuite de fd.
 	if (pipe(toScript) == -1)
 		return (false);
 	if (pipe(fromScript) == -1)
@@ -190,15 +230,19 @@ bool startCgi(const std::string& interpreter, const std::string& scriptPath,
 		closePipe(fromScript);
 		return (false);
 	}
+	// fork renvoie 0 dans l'enfant : il part dans runScript et n'en revient pas.
 	if (pid == 0)
 		runScript(toScript, fromScript, interpreter, scriptPath, env);
 
-	// The parent keeps one end of each pipe: it writes the body, reads the output.
+	// Le parent garde un bout de chaque pipe : il écrit le body et lit la
+	// sortie. Les deux autres bouts appartiennent à l'enfant.
 	close(toScript[0]);
 	close(fromScript[1]);
+	// Non bloquants : ces deux fds iront dans epoll, comme les sockets.
 	if (fcntl(toScript[1], F_SETFL, O_NONBLOCK) == -1
 		|| fcntl(fromScript[0], F_SETFL, O_NONBLOCK) == -1)
 	{
+		// Le script tourne déjà : on le tue et on le récupère (pas de zombie).
 		close(toScript[1]);
 		close(fromScript[0]);
 		kill(pid, SIGKILL);
@@ -211,12 +255,14 @@ bool startCgi(const std::string& interpreter, const std::string& scriptPath,
 	return (true);
 }
 
+// isdigit avec un char signé (accent UTF-8) est un comportement indéfini :
+// on convertit d'abord en unsigned char.
 static bool isDigit(char c)
 {
 	return (std::isdigit(static_cast<unsigned char>(c)) != 0);
 }
 
-// Header names ignore case: "Content-Type" and "content-type" are the same.
+// Les noms de headers ignorent la casse : "Content-Type" = "content-type".
 static std::string toLower(const std::string& text)
 {
 	std::string lower = text;
@@ -226,8 +272,8 @@ static std::string toLower(const std::string& text)
 	return (lower);
 }
 
-// "Status: 404 Not Found" -> 404 and "Not Found". Three digits, then the
-// reason (optional), as on the first line of an HTTP response.
+// "Status: 404 Not Found" -> 404 et "Not Found". Trois chiffres, puis la
+// phrase (facultative), comme sur la 1re ligne d'une réponse HTTP.
 static bool parseStatus(const std::string& value, CgiOutput& result)
 {
 	if (value.size() < 3 || !isDigit(value[0]) || !isDigit(value[1])
@@ -243,7 +289,8 @@ static bool parseStatus(const std::string& value, CgiOutput& result)
 	return (true);
 }
 
-// "Content-Length: 42" -> 42. Digits only; refuses a length that would overflow.
+// "Content-Length: 42" -> 42. Uniquement des chiffres ; refuse une longueur
+// qui ferait déborder le calcul (18 chiffres maximum).
 static bool parseLength(const std::string& value, std::string::size_type& length)
 {
 	if (value.empty() || value.size() > 18)
@@ -258,10 +305,15 @@ static bool parseLength(const std::string& value, std::string::size_type& length
 	return (true);
 }
 
+// ----------------------------------------------------------------------------
+// parseCgiOutput : la sortie du script ("headers, ligne vide, body")
+// transformée en morceaux de réponse HTTP. Faux = sortie invalide -> 502.
+// ----------------------------------------------------------------------------
 bool parseCgiOutput(const std::string& output, CgiOutput& result)
 {
-	// The headers end at the first blank line. Scripts often write "\n" only
-	// (Python's print), so "\n\n" is accepted as well as "\r\n\r\n".
+	// Les headers finissent à la première ligne vide. Les scripts écrivent
+	// souvent "\n" seul (le print de Python) : "\n\n" est accepté autant que
+	// "\r\n\r\n". On garde celui qui arrive le plus tôt.
 	std::string::size_type	headersEnd = output.find("\r\n\r\n");
 	std::string::size_type	lfHeadersEnd = output.find("\n\n");
 	std::string::size_type	separatorSize = 4;
@@ -271,6 +323,8 @@ bool parseCgiOutput(const std::string& output, CgiOutput& result)
 		headersEnd = lfHeadersEnd;
 		separatorSize = 2;
 	}
+	// Pas de ligne vide : ce n'est pas une sortie CGI (script qui a planté
+	// avant d'écrire, par exemple).
 	if (headersEnd == std::string::npos)
 		return (false);
 
@@ -300,6 +354,8 @@ bool parseCgiOutput(const std::string& output, CgiOutput& result)
 		std::string::size_type	start = value.find_first_not_of(" \t");
 
 		value = (start == std::string::npos) ? "" : value.substr(start);
+		// "Status:" n'est pas un vrai header HTTP : c'est la façon CGI de
+		// choisir le code de la réponse.
 		if (toLower(name) == "status")
 		{
 			if (!parseStatus(value, result))
@@ -310,27 +366,32 @@ bool parseCgiOutput(const std::string& output, CgiOutput& result)
 			result.contentType = value;
 		else if (toLower(name) == "content-length")
 		{
-			// Without it, the end of the output (EOF) marks the end of the body.
+			// Sans lui, la fin de la sortie (EOF) marque la fin du body.
+			// Avec lui, on coupe le body à cette taille. Plus grand que ce que
+			// le script a écrit : sortie incohérente, refusée.
 			std::string::size_type length;
 
 			if (!parseLength(value, length) || length > result.body.size())
 				return (false);
 			result.body.erase(length);
 		}
-		else if (toLower(name) != "connection")	// webserv closes every connection itself
+		else if (toLower(name) != "connection")	// webserv ferme lui-même chaque connexion
 		{
+			// Tous les autres headers sont recopiés tels quels dans la
+			// réponse : Set-Cookie, Location, Cache-Control...
 			if (toLower(name) == "location")
 				hasLocation = true;
 			result.headers += name + ": " + value + "\r\n";
 		}
 	}
-	// A script that only gives "Location:" asks for a redirection.
+	// Un script qui donne seulement "Location:" demande une redirection
+	// (RFC 3875) : 302 Found.
 	if (hasLocation && !hasStatus)
 	{
 		result.status = 302;
 		result.reason = "Found";
 	}
-	// A body must say what it is.
+	// Un body doit dire ce qu'il est.
 	if (result.contentType.empty() && !result.body.empty())
 		return (false);
 	return (true);
