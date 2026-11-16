@@ -37,12 +37,8 @@ class Request
 
 		Request();
 
-		// Ancienne interface "tout en un", déclarée mais jamais définie ni
-		// appelée : le serveur utilise parseHeaders puis parseBody.
-		ParseStatus parse(const std::string& raw, std::string::size_type maxBodySize);
-
-		// En deux temps : la limite de body dépend de la location, connue
-		// seulement après avoir lu l'URL dans les headers.
+		// L'analyse se fait en deux temps : la limite de body dépend de la
+		// location, connue seulement après avoir lu l'URL dans les headers.
 		ParseStatus parseHeaders(const std::string& raw);
 		ParseStatus parseBody(const std::string& raw, std::string::size_type maxBodySize);
 

@@ -598,7 +598,10 @@ void Server::handleClientWrite(int clientFd)
 	if (bytesSent > 0)
 	{
 		sentIt->second += static_cast<std::string::size_type>(bytesSent);
-		// _lastActivity[clientFd] = std::time(NULL);
+		// Chaque envoi réussi compte comme une activité : un client qui
+		// télécharge lentement un gros fichier n'est pas coupé au bout de 30 s
+		// tant que l'envoi avance.
+		_lastActivity[clientFd] = std::time(NULL);
 
 		if (sentIt->second == response.size())
 			closeClient(clientFd);
