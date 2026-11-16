@@ -1,3 +1,11 @@
+// ============================================================================
+// dumpConfig : affiche la configuration finale, après valeurs par défaut et
+// héritage. Ce n'est pas utilisé par le serveur : c'est un outil de test.
+// tests/config/config_test lance le parser sur chaque fichier de
+// tests/config/valid/ et compare cet affichage au fichier attendu de
+// tests/config/expected/. Une erreur d'héritage se voit donc tout de suite.
+// ============================================================================
+
 #include "config/Config.hpp"
 #include <ostream>
 
@@ -17,7 +25,7 @@ static void dumpMethods(const LocationConfig& location, std::ostream& out)
 	out << "\n";
 }
 
-// Optional features are shown only when they are enabled.
+// Les options ne sont affichées que si elles sont activées.
 static void dumpOptions(const LocationConfig& location, std::ostream& out)
 {
 	if (location.redirectCode != 0)
@@ -29,6 +37,7 @@ static void dumpOptions(const LocationConfig& location, std::ostream& out)
 		out << "        cgi: " << it->first << " -> " << it->second << "\n";
 }
 
+// "(own)" ou "(inherited)" : montre si le root vient de la location ou du server.
 static void dumpLocation(const LocationConfig& location, std::ostream& out)
 {
 	out << "    location " << location.path << "\n"

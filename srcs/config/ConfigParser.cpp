@@ -1,3 +1,21 @@
+// ============================================================================
+// ConfigParser : 2e étape du parsing de la configuration.
+//
+// Technique : un parser "à descente récursive". Chaque règle de la grammaire
+// devient une fonction, et une fonction appelle celles des règles qu'elle
+// contient :
+//   parse()          config    := server+
+//   parseServer()    server    := "server" "{" (location | directive)* "}"
+//   parseLocation()  location  := "location" CHEMIN "{" directive* "}"
+//   parseDirective() directive := NOM ARG* ";"
+//
+// Ensuite, chaque directive est confiée à SA fonction de traitement, trouvée
+// dans une table (std::map nom -> pointeur sur fonction membre). Ajouter une
+// directive = écrire une fonction + une ligne dans initHandlers().
+//
+// Toute erreur lance une ConfigError avec le numéro de ligne.
+// ============================================================================
+
 #include "config/ConfigParser.hpp"
 #include "config/ConfigError.hpp"
 #include <cctype>
@@ -14,8 +32,10 @@ ConfigParser::~ConfigParser()
 {
 }
 
-// ===== Entry point =====
+// ===== Point d'entrée =====
 
+// Le fichier n'est qu'une suite de blocs "server". Tout autre mot au premier
+// niveau est une erreur, et un fichier sans aucun server aussi.
 std::vector<ServerConfig> ConfigParser::parse()
 {
 	std::vector<ServerConfig> servers;
@@ -34,14 +54,16 @@ std::vector<ServerConfig> ConfigParser::parse()
 	return servers;
 }
 
-// ===== Token navigation =====
+// ===== Se déplacer dans la liste de tokens =====
+// Ces petites fonctions évitent de manipuler _pos partout, et donc les
+// lectures hors du tableau.
 
 bool ConfigParser::isAtEnd() const
 {
 	return _pos >= _tokens.size();
 }
 
-// Callers must check isAtEnd() first.
+// Le token courant. À n'appeler qu'après avoir vérifié isAtEnd().
 const Token& ConfigParser::current() const
 {
 	return _tokens[_pos];
@@ -53,12 +75,14 @@ void ConfigParser::advance()
 		_pos++;
 }
 
+// Le token courant est-il ce mot précis ("server", "location"...) ?
 bool ConfigParser::isWord(const std::string& value) const
 {
 	return !isAtEnd() && current().type == Token::WORD && current().value == value;
 }
 
-// Consumes the current token if it has the expected type, throws otherwise.
+// "Il DOIT y avoir tel token ici" : on le consomme, sinon on lance une erreur
+// qui dit ce qu'on attendait et ce qu'on a trouvé.
 void ConfigParser::expect(Token::Type type, const std::string& what)
 {
 	if (isAtEnd())
@@ -69,8 +93,8 @@ void ConfigParser::expect(Token::Type type, const std::string& what)
 	advance();
 }
 
-// True on '}'. Reaching the end of the file means the block opened
-// at openLine was never closed: report that line, it is where the fix goes.
+// Vrai sur '}'. Si le fichier se termine avant, le bloc n'a jamais été fermé :
+// on donne la ligne où il a été OUVERT, c'est là qu'il faut aller corriger.
 bool ConfigParser::isBlockEnd(int openLine) const
 {
 	if (isAtEnd())
@@ -78,15 +102,16 @@ bool ConfigParser::isBlockEnd(int openLine) const
 	return current().type == Token::CLOSE_BRACE;
 }
 
-// ===== Grammar rules =====
+// ===== Les règles de la grammaire =====
 
+// server { ... } : on lit des locations et des directives jusqu'à '}'.
 ServerConfig ConfigParser::parseServer()
 {
 	ServerConfig	server;
 	int				openLine = current().line;
 
-	_seenInServer.clear();
-	advance();
+	_seenInServer.clear();		// pour détecter une directive écrite deux fois
+	advance();					// le mot "server"
 	expect(Token::OPEN_BRACE, "'{' after 'server'");
 	while (!isBlockEnd(openLine))
 	{
@@ -96,13 +121,16 @@ ServerConfig ConfigParser::parseServer()
 		else
 			applyServerDirective(server, parseDirective());
 	}
+	// Vérifié à la fin du bloc : les directives peuvent venir dans n'importe
+	// quel ordre, et les locations avant les directives du server.
 	requireEssentials(server, openLine);
 	finalizeServer(server);
-	advance();
+	advance();					// le '}'
 	return server;
 }
 
-// Prefixes are compared after normalization: "/files" and "/files/" are the same.
+// Deux locations au même chemin seraient ambiguës : refusé. Les chemins sont
+// comparés après normalisation : "/files" et "/files/" sont la même location.
 void ConfigParser::addLocation(ServerConfig& server)
 {
 	int				line = current().line;
@@ -116,7 +144,7 @@ void ConfigParser::addLocation(ServerConfig& server)
 	server.locations.push_back(location);
 }
 
-// Checked at the end of the block: these directives can appear in any order.
+// Un server sans port ou sans dossier racine ne peut rien servir.
 void ConfigParser::requireEssentials(const ServerConfig& server, int openLine) const
 {
 	if (server.listens.empty())
@@ -125,13 +153,14 @@ void ConfigParser::requireEssentials(const ServerConfig& server, int openLine) c
 		throw ConfigError(openLine, "server has no 'root' directive");
 }
 
+// location /chemin { ... } : seulement des directives, pas de bloc imbriqué.
 LocationConfig ConfigParser::parseLocation()
 {
 	LocationConfig	location;
 	int				openLine = current().line;
 
 	_seenInLocation.clear();
-	advance();
+	advance();					// le mot "location"
 	if (isAtEnd() || current().type != Token::WORD)
 		throw ConfigError(openLine, "missing path after 'location'");
 	if (current().value[0] != '/')
@@ -148,12 +177,12 @@ LocationConfig ConfigParser::parseLocation()
 		applyLocationDirective(location, parseDirective());
 	}
 	applyLocationDefaults(location);
-	advance();
+	advance();					// le '}'
 	return location;
 }
 
-// Reads "name arg1 arg2 ;". Hitting '{', '}' or the end of the file
-// before ';' means the ';' was forgotten.
+// Lit "nom arg1 arg2 ;". Tomber sur '{', '}' ou la fin du fichier avant le
+// ';' veut dire que le ';' a été oublié : on donne la ligne de la directive.
 ConfigParser::Directive ConfigParser::parseDirective()
 {
 	Directive directive;
@@ -170,18 +199,22 @@ ConfigParser::Directive ConfigParser::parseDirective()
 		directive.args.push_back(current().value);
 		advance();
 	}
-	advance();
+	advance();					// le ';'
 	return directive;
 }
 
+// Un "server" dans un server ou dans une location est refusé avec un message clair.
 void ConfigParser::rejectNestedBlock(const std::string& context) const
 {
 	if (isWord("server"))
 		throw ConfigError(current().line, "'server' block is not allowed inside a " + context);
 }
 
-// Runs at the end of the block: the server's directives may follow its locations.
-// Defaults come first so that locations inherit complete values.
+// ===== Valeurs par défaut et héritage =====
+
+// Appelée à la fin du bloc server (ses directives peuvent suivre ses
+// locations). Les valeurs par défaut du server sont posées D'ABORD, pour que
+// les locations héritent de valeurs complètes.
 void ConfigParser::finalizeServer(ServerConfig& server)
 {
 	applyServerDefaults(server);
@@ -190,7 +223,8 @@ void ConfigParser::finalizeServer(ServerConfig& server)
 		inheritFromServer(server.locations[i], server);
 }
 
-// index and maxBodySize get no default in a location: they come from its server.
+// index et maxBodySize n'ont pas de défaut propre à une location : ils
+// viennent de leur server. Défauts : index.html et 1 Mo (comme NGINX).
 void ConfigParser::applyServerDefaults(ServerConfig& server)
 {
 	if (server.index.empty())
@@ -199,13 +233,15 @@ void ConfigParser::applyServerDefaults(ServerConfig& server)
 		server.maxBodySize = 1024 * 1024;
 }
 
+// Une location sans "methods" accepte seulement GET : le choix le plus sûr.
 void ConfigParser::applyLocationDefaults(LocationConfig& location)
 {
 	if (location.methods.empty())
 		location.methods.push_back("GET");
 }
 
-// Guarantees that every request path matches at least one location.
+// Ajoute une location "/" si le fichier n'en a pas : toute URL trouve ainsi
+// au moins une location, et findLocation ne peut jamais échouer.
 void ConfigParser::ensureRootLocation(ServerConfig& server)
 {
 	for (size_t i = 0; i < server.locations.size(); i++)
@@ -221,8 +257,11 @@ void ConfigParser::ensureRootLocation(ServerConfig& server)
 	server.locations.push_back(location);
 }
 
-// hasOwnRoot stays false for an inherited root: resolvePath depends on it.
-// map::insert keeps existing keys, so a location's own error pages win.
+// L'héritage server -> location : ce que la location ne précise pas est
+// recopié depuis le server.
+// hasOwnRoot reste false pour un root hérité : resolvePath en dépend.
+// map::insert n'écrase pas une clé existante : les pages d'erreur propres à
+// la location l'emportent sur celles du server.
 void ConfigParser::inheritFromServer(LocationConfig& location, const ServerConfig& server)
 {
 	if (!location.hasOwnRoot)
@@ -234,7 +273,9 @@ void ConfigParser::inheritFromServer(LocationConfig& location, const ServerConfi
 	location.errorPages.insert(server.errorPages.begin(), server.errorPages.end());
 }
 
-// "/files/" and "/files" are the same prefix; "/" stays "/".
+// ===== Petits outils de validation =====
+
+// "/files/" et "/files" sont le même préfixe ; "/" reste "/".
 std::string ConfigParser::normalizeLocationPath(const std::string& path)
 {
 	std::string normalized = path;
@@ -244,8 +285,10 @@ std::string ConfigParser::normalizeLocationPath(const std::string& path)
 	return normalized;
 }
 
-// Converts a text made only of digits. The first character is checked because
-// strtol would accept a sign. It returns LONG_MAX when the number is too big.
+// Convertit un texte fait uniquement de chiffres.
+// - le 1er caractère est vérifié à la main : strtol accepterait un signe ;
+// - *end == '\0' : tout le texte a été lu ("80a" est refusé) ;
+// - strtol renvoie LONG_MAX quand le nombre est trop grand : refusé aussi.
 bool ConfigParser::parseNumber(const std::string& text, long& value)
 {
 	char* end;
@@ -256,7 +299,8 @@ bool ConfigParser::parseNumber(const std::string& text, long& value)
 	return *end == '\0' && value != LONG_MAX;
 }
 
-// Exactly four parts: every part but the last one must end with a dot.
+// Une IPv4 : exactement 4 parties ; toutes sauf la dernière finissent par un
+// point. (part < 3) != (dot trouvé) détecte un point manquant ou en trop.
 bool ConfigParser::isValidIpv4(const std::string& ip)
 {
 	size_t start = 0;
@@ -274,7 +318,8 @@ bool ConfigParser::isValidIpv4(const std::string& ip)
 	return true;
 }
 
-// A leading zero is refused: getaddrinfo may read "010" as octal, so 8.
+// Une partie : 0 à 255. Un zéro en tête est refusé : getaddrinfo pourrait lire
+// "010" en octal, donc 8, et on écouterait sur une autre adresse que prévu.
 bool ConfigParser::isValidIpv4Part(const std::string& part)
 {
 	long value;
@@ -284,8 +329,12 @@ bool ConfigParser::isValidIpv4Part(const std::string& part)
 	return parseNumber(part, value) && value <= 255;
 }
 
-// ===== Dispatch =====
+// ===== Aiguillage des directives =====
 
+// La table "nom de directive -> fonction qui la traite". Deux tables, car
+// les directives autorisées ne sont pas les mêmes dans server et location.
+// &ConfigParser::parseListen est un pointeur sur fonction MEMBRE : il faut un
+// objet pour l'appeler (voir this->* plus bas).
 void ConfigParser::initHandlers()
 {
 	_serverHandlers["listen"] = &ConfigParser::parseListen;
@@ -305,6 +354,9 @@ void ConfigParser::initHandlers()
 	_locationHandlers["cgi"] = &ConfigParser::parseCgi;
 }
 
+// Trouve la fonction de la directive et l'appelle. Le message d'erreur
+// distingue "directive inconnue" et "directive au mauvais endroit"
+// (par exemple "methods" dans un server : elle n'existe que dans une location).
 void ConfigParser::applyServerDirective(ServerConfig& server, const Directive& directive)
 {
 	std::map<std::string, ServerHandler>::const_iterator it = _serverHandlers.find(directive.name);
@@ -317,6 +369,7 @@ void ConfigParser::applyServerDirective(ServerConfig& server, const Directive& d
 		throw ConfigError(directive.line, "unknown directive '" + directive.name + "'");
 	}
 	rejectDuplicate(_seenInServer, directive);
+	// Appel par pointeur sur fonction membre : (objet->*pointeur)(arguments).
 	(this->*(it->second))(server, directive);
 }
 
@@ -335,6 +388,7 @@ void ConfigParser::applyLocationDirective(LocationConfig& location, const Direct
 	(this->*(it->second))(location, directive);
 }
 
+// Deux surcharges : un nombre exact d'arguments, ou un intervalle.
 void ConfigParser::requireArgCount(const Directive& directive, size_t expected) const
 {
 	if (directive.args.size() != expected)
@@ -347,8 +401,11 @@ void ConfigParser::requireArgCount(const Directive& directive, size_t min, size_
 		throw ConfigError(directive.line, "wrong number of arguments for '" + directive.name + "'");
 }
 
-// listen, error_page and cgi may repeat with different keys:
-// their own handlers check for a repeated key.
+// Une directive écrite deux fois dans le même bloc est refusée : laquelle
+// garder serait arbitraire. std::set::insert renvoie une paire dont .second
+// vaut false si le nom y était déjà.
+// listen, error_page et cgi peuvent se répéter avec des valeurs différentes :
+// leurs propres fonctions vérifient qu'une même valeur n'est pas répétée.
 void ConfigParser::rejectDuplicate(std::set<std::string>& seen, const Directive& directive) const
 {
 	if (directive.name == "listen" || directive.name == "error_page" || directive.name == "cgi")
@@ -357,7 +414,9 @@ void ConfigParser::rejectDuplicate(std::set<std::string>& seen, const Directive&
 		throw ConfigError(directive.line, "duplicate '" + directive.name + "' directive");
 }
 
-// ===== Directive handlers =====
+// ===== Une fonction par directive =====
+// Chacune vérifie son nombre d'arguments, valide les valeurs, puis remplit
+// la structure.
 
 void ConfigParser::parseServerRoot(ServerConfig& server, const Directive& directive)
 {
@@ -365,6 +424,7 @@ void ConfigParser::parseServerRoot(ServerConfig& server, const Directive& direct
 	server.root = directive.args[0];
 }
 
+// Un root de location remplace le préfixe (voir resolvePath) : on le note.
 void ConfigParser::parseLocationRoot(LocationConfig& location, const Directive& directive)
 {
 	requireArgCount(directive, 1);
@@ -384,6 +444,7 @@ void ConfigParser::parseLocationIndex(LocationConfig& location, const Directive&
 	location.index = directive.args[0];
 }
 
+// Seulement "on" ou "off", en minuscules, comme dans NGINX.
 void ConfigParser::parseAutoindex(LocationConfig& location, const Directive& directive)
 {
 	requireArgCount(directive, 1);
@@ -396,6 +457,7 @@ void ConfigParser::parseAutoindex(LocationConfig& location, const Directive& dir
 			+ "' for 'autoindex', expected 'on' or 'off'");
 }
 
+// "methods GET POST DELETE;" : 1 à 3 méthodes connues, sans doublon.
 void ConfigParser::parseMethods(LocationConfig& location, const Directive& directive)
 {
 	requireArgCount(directive, 1, 3);
@@ -411,12 +473,14 @@ void ConfigParser::parseMethods(LocationConfig& location, const Directive& direc
 	}
 }
 
+// Le dossier où POST enregistre les fichiers. Sans elle, POST répond 403.
 void ConfigParser::parseUploadStore(LocationConfig& location, const Directive& directive)
 {
 	requireArgCount(directive, 1);
 	location.uploadStore = directive.args[0];
 }
 
+// "return 301 /;" : seulement les codes de redirection qui ont un sens.
 void ConfigParser::parseReturn(LocationConfig& location, const Directive& directive)
 {
 	long code;
@@ -429,6 +493,8 @@ void ConfigParser::parseReturn(LocationConfig& location, const Directive& direct
 	location.redirectUrl = directive.args[1];
 }
 
+// "cgi .py /usr/bin/python3;" : une extension -> son interpréteur. Plusieurs
+// lignes cgi = plusieurs langages (le bonus "plusieurs CGI").
 void ConfigParser::parseCgi(LocationConfig& location, const Directive& directive)
 {
 	requireArgCount(directive, 2);
@@ -452,7 +518,8 @@ void ConfigParser::parseLocationErrorPage(LocationConfig& location, const Direct
 	addErrorPage(location.errorPages, directive);
 }
 
-// Same rules at both levels: only the destination map changes.
+// Mêmes règles au niveau server et location : seule la map de destination
+// change, d'où cette fonction commune. Codes d'erreur seulement (400 à 599).
 void ConfigParser::addErrorPage(std::map<int, std::string>& errorPages, const Directive& directive)
 {
 	long code;
@@ -475,8 +542,9 @@ void ConfigParser::parseLocationBodySize(LocationConfig& location, const Directi
 	location.maxBodySize = readBodySize(directive);
 }
 
-// "1024" is in bytes, "10K" and "10M" are multiplied. The limit is checked
-// before the multiplication, which could otherwise overflow.
+// "1024" est en octets, "10K" et "10M" sont multipliés par 1024 et 1024².
+// Le dépassement est vérifié AVANT la multiplication (value > LONG_MAX / multiplier) :
+// après, il serait trop tard, le résultat aurait déjà débordé.
 size_t ConfigParser::readBodySize(const Directive& directive)
 {
 	requireArgCount(directive, 1);
@@ -497,8 +565,10 @@ size_t ConfigParser::readBodySize(const Directive& directive)
 	return static_cast<size_t>(value * multiplier);
 }
 
-// "8080" listens on every interface. "localhost" becomes 127.0.0.1 here,
-// so that comparing two addresses as text stays correct.
+// "listen 8080;" écoute sur toutes les interfaces (0.0.0.0).
+// "listen 127.0.0.1:8080;" sur une seule. "localhost" devient 127.0.0.1 ici,
+// pour que la comparaison de deux adresses sous forme de texte reste juste.
+// Le port doit être entre 1 et 65535.
 void ConfigParser::parseListen(ServerConfig& server, const Directive& directive)
 {
 	requireArgCount(directive, 1);
@@ -522,6 +592,11 @@ void ConfigParser::parseListen(ServerConfig& server, const Directive& directive)
 	if (!parseNumber(portText, port) || port < 1 || port > 65535)
 		throw ConfigError(directive.line, "invalid port '" + portText + "' in 'listen'");
 	address.port = static_cast<int>(port);
+	// _usedAddresses contient tous les listen du FICHIER (tous servers
+	// confondus) : deux sites sur la même adresse:port sont refusés ici,
+	// avec un message, au lieu d'un bind() qui échouerait au démarrage.
+	// Nous n'avons pas fait de virtual hosts (server_name) : c'est le choix
+	// que la grille accepte ("this should result in an error").
 	for (size_t i = 0; i < _usedAddresses.size(); i++)
 	{
 		if (addressesConflict(_usedAddresses[i], address))
@@ -531,8 +606,9 @@ void ConfigParser::parseListen(ServerConfig& server, const Directive& directive)
 	server.listens.push_back(address);
 }
 
-// 0.0.0.0 takes the port on every interface, so bind() would fail
-// for any other address on that port.
+// Même port + même IP : conflit. 0.0.0.0 prend le port sur TOUTES les
+// interfaces : il entre donc en conflit avec n'importe quelle IP sur ce port.
+// 127.0.0.1:8080 et 127.0.0.2:8080 ne sont pas en conflit (deux sites).
 bool ConfigParser::addressesConflict(const ListenAddress& a, const ListenAddress& b)
 {
 	if (a.port != b.port)
