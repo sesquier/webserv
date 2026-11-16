@@ -10,14 +10,39 @@
 /*                                                                            */
 /******************************************************************************/
 
+// ============================================================================
+// request.cpp : comprendre ce que le client a envoyé.
+//
+// Une requête HTTP est du texte :
+//     POST /upload/a.txt HTTP/1.1\r\n        <- ligne de requête
+//     Host: localhost\r\n                    <- headers
+//     Content-Length: 5\r\n
+//     \r\n                                   <- ligne vide : fin des headers
+//     hello                                  <- body (facultatif)
+//
+// Comme TCP livre les données par morceaux, chaque fonction peut répondre
+// INCOMPLETE ("revenez quand vous aurez la suite"). La boucle rappelle le
+// parsing après chaque recv, sur tout ce qui a été reçu depuis le début.
+//
+// Deux temps, séparés exprès :
+//   parseHeaders : la ligne de requête et les headers ;
+//   parseBody    : le body, avec la limite de taille de la LOCATION, qu'on
+//                  ne connaît qu'après avoir lu l'URL dans les headers.
+// ============================================================================
+
 #include "request.hpp"
 #include <stdexcept>
 #include <iostream>
 #include <sstream>
 #include <cstdio>
 
+// Au-delà de 16 Ko de headers : 431 Request Header Fields Too Large.
+// Sans limite, un client pourrait envoyer des headers sans fin et remplir
+// la mémoire du serveur.
 static const std::string::size_type MAX_HEADERS_SIZE = 16 * 1024;
 
+// Les noms de headers ne tiennent pas compte de la casse : "Content-Length"
+// et "content-length" sont le même header. On compare donc en minuscules.
 static std::string toLowerCase(const std::string& value)
 {
     std::string result = value;
@@ -30,6 +55,15 @@ static std::string toLowerCase(const std::string& value)
     return (result);
 }
 
+// ----------------------------------------------------------------------------
+// Le format chunked (Transfer-Encoding: chunked) : le body arrive en morceaux,
+// chacun précédé de sa taille en HEXADÉCIMAL :
+//     5\r\nhello\r\n      <- un morceau de 5 octets
+//     6\r\n world\r\n     <- un morceau de 6 octets
+//     0\r\n\r\n           <- taille 0 : fin du body
+// Le client l'utilise quand il ne connaît pas la taille totale à l'avance.
+// Cette fonction reconstitue le body complet dans "decoded" ("hello world").
+// ----------------------------------------------------------------------------
 static Request::ParseStatus decodeChunkedBody(const std::string& raw, std::string::size_type bodyStart, std::string::size_type maxBodySize, std::string& decoded)
 {
     decoded.clear();
@@ -38,11 +72,13 @@ static Request::ParseStatus decodeChunkedBody(const std::string& raw, std::strin
 
     while (true)
     {
+        // La ligne de taille n'est pas encore arrivée en entier.
         std::string::size_type lineEnd = raw.find("\r\n", pos);
 
         if (lineEnd == std::string::npos)
             return (Request::INCOMPLETE);
 
+        // "5;extension=x" : ce qui suit un ';' est une extension, ignorée.
         std::string sizeLine = raw.substr(pos, lineEnd - pos);
         std::string::size_type semicolon = sizeLine.find(';');
 
@@ -51,6 +87,7 @@ static Request::ParseStatus decodeChunkedBody(const std::string& raw, std::strin
         if (sizeText.empty())
             return (Request::INVALID);
 
+        // Conversion hexadécimale à la main, chiffre par chiffre.
         std::string::size_type chunkSize = 0;
 
         for (std::string::size_type i = 0; i < sizeText.size(); ++i)
@@ -67,6 +104,8 @@ static Request::ParseStatus decodeChunkedBody(const std::string& raw, std::strin
             else
                 return (Request::INVALID);
 
+            // Vérifié AVANT de multiplier : une taille énorme ferait déborder
+            // chunkSize et deviendrait petite. (size_type)-1 = valeur maximale.
             if (chunkSize > ((std::string::size_type)-1 - digit) / 16)
                 return (Request::INVALID);
 
@@ -75,8 +114,11 @@ static Request::ParseStatus decodeChunkedBody(const std::string& raw, std::strin
 
         pos = lineEnd + 2;
 
+        // Morceau de taille 0 : c'est la fin. Il peut être suivi de
+        // "trailers" (des headers placés après le body), puis d'une ligne vide.
         if (chunkSize == 0)
         {
+            // Cas normal : pas de trailer, juste la ligne vide.
             if (raw.compare(pos, 2, "\r\n") == 0)
                 return (Request::COMPLETE);
 
@@ -85,6 +127,8 @@ static Request::ParseStatus decodeChunkedBody(const std::string& raw, std::strin
             if (trailerEnd == std::string::npos)
                 return (Request::INCOMPLETE);
 
+            // Chaque trailer est vérifié comme un header : "nom: valeur",
+            // nom fait de caractères autorisés, valeur sans caractère de contrôle.
             std::string trailers = raw.substr(pos, trailerEnd - pos);
             std::string::size_type trailerPos = 0;
 
@@ -117,6 +161,8 @@ static Request::ParseStatus decodeChunkedBody(const std::string& raw, std::strin
                     return (Request::INVALID);
                 }
 
+                // Ces headers-là ne peuvent pas arriver après le body : ils
+                // changeraient la façon de lire une requête déjà lue (RFC 9112).
                 if (lowerName == "content-length" || lowerName == "transfer-encoding" || lowerName == "host" || lowerName == "trailer")
                     return (Request::INVALID);
 
@@ -134,9 +180,12 @@ static Request::ParseStatus decodeChunkedBody(const std::string& raw, std::strin
             return (Request::COMPLETE);
         }
 
+        // La limite client_max_body_size s'applique au body RECONSTITUÉ.
+        // Écrit comme une soustraction pour ne jamais déborder.
         if (chunkSize > maxBodySize - decoded.size())
             return (Request::BODY_TOO_LARGE);
 
+        // Le morceau, ou le "\r\n" qui le suit, n'est pas encore arrivé.
         if (chunkSize > raw.size() - pos)
             return (Request::INCOMPLETE);
 
@@ -146,6 +195,7 @@ static Request::ParseStatus decodeChunkedBody(const std::string& raw, std::strin
         decoded.append(raw, pos, chunkSize);
         pos += chunkSize;
 
+        // Chaque morceau doit se terminer par "\r\n".
         if (raw.compare(pos, 2, "\r\n") != 0)
             return (Request::INVALID);
 
@@ -158,8 +208,13 @@ Request::Request() : _method(), _target(), _version(), _hasContentLength(false),
 
 }
 
+// ----------------------------------------------------------------------------
+// parseHeaders : la ligne de requête et les headers.
+// Renvoie INCOMPLETE, COMPLETE, INVALID (-> 400) ou HEADERS_TOO_LARGE (-> 431).
+// ----------------------------------------------------------------------------
 Request::ParseStatus Request::parseHeaders(const std::string& raw)
 {
+    // Remise à zéro : l'objet peut être réutilisé.
     _method.clear();
     _target.clear();
     _version.clear();
@@ -171,6 +226,9 @@ Request::ParseStatus Request::parseHeaders(const std::string& raw)
     _contentLength = 0;
     _bodyStart = 0;
 
+    // La fin des headers : une ligne vide. La norme dit "\r\n\r\n", mais on
+    // tolère aussi "\n\n" (certains outils, comme nc, n'envoient que des \n).
+    // On garde le séparateur trouvé le plus tôt.
     std::string::size_type headersEnd = raw.find("\r\n\r\n");
     std::string::size_type separatorSize = 4;
 
@@ -182,6 +240,8 @@ Request::ParseStatus Request::parseHeaders(const std::string& raw)
         separatorSize = 2;
     }
 
+    // Pas encore de ligne vide : on attend la suite, sauf si on a déjà reçu
+    // plus que la limite.
     if (headersEnd == std::string::npos)
     {
         if (raw.size() >= MAX_HEADERS_SIZE)
@@ -193,6 +253,7 @@ Request::ParseStatus Request::parseHeaders(const std::string& raw)
     if (headersEnd > MAX_HEADERS_SIZE)
         return (HEADERS_TOO_LARGE);
 
+    // La ligne de requête : "MÉTHODE CIBLE VERSION", séparés par un espace.
     std::string headers = raw.substr(0, headersEnd);
     std::string::size_type lineEnd = headers.find('\n');
     std::string line = headers.substr(0, lineEnd);
@@ -214,10 +275,14 @@ Request::ParseStatus Request::parseHeaders(const std::string& raw)
     _target = line.substr(firstSpace + 1, secondSpace - firstSpace - 1);
     _version = line.substr(secondSpace + 1);
 
+    // Exactement 3 morceaux, aucun vide.
     if (_method.empty() || _target.empty() || _version.empty()
             || _version.find(' ') != std::string::npos)
         return (INVALID);
 
+    // Une méthode est un "token" HTTP : lettres, chiffres et quelques
+    // symboles. Une méthode inconnue mais bien formée (FOO) passe ici et
+    // recevra 501 plus tard ; une méthode mal formée est une requête invalide.
     for (std::string::size_type i = 0; i < _method.size(); ++i)
     {
         char c = _method[i];
@@ -231,6 +296,7 @@ Request::ParseStatus Request::parseHeaders(const std::string& raw)
     if (_version != "HTTP/1.0" && _version != "HTTP/1.1")
         return (INVALID);
 
+    // Les headers, une ligne à la fois : "Nom: valeur".
     std::string::size_type pos = headers.size();
 
     if (lineEnd != std::string::npos)
@@ -258,6 +324,7 @@ Request::ParseStatus Request::parseHeaders(const std::string& raw)
         std::string name = header.substr(0, colon);
         std::string value = header.substr(colon + 1);
 
+        // Un seul Host, et non vide.
         if (toLowerCase(name) == "host")
         {
             if (hasHost || value.empty())
@@ -265,17 +332,24 @@ Request::ParseStatus Request::parseHeaders(const std::string& raw)
             hasHost = true;
         }
 
+        // On retire les espaces et tabulations autour de la valeur.
         while (!value.empty() && (value[0] == ' ' || value[0] == '\t'))
             value.erase(0, 1);
 
         while (!value.empty() && (value[value.size() - 1] == ' ' || value[value.size() - 1] == '\t'))
             value.erase(value.size() - 1);
 
-        // A header sent twice is one header with both values, comma-separated.
+        // Tous les headers sont gardés (nom en minuscules) : le CGI doit
+        // recevoir toute la requête (Cookie -> HTTP_COOKIE...). Un header
+        // répété devient un seul header aux valeurs séparées par ", ",
+        // comme le prévoit HTTP.
         std::string& stored = _headers[toLowerCase(name)];
 
         stored = stored.empty() ? value : stored + ", " + value;
 
+        // Content-Length : uniquement des chiffres, une seule fois, sans
+        // débordement. Deux Content-Length différents permettraient à deux
+        // serveurs de lire la requête différemment ("request smuggling").
         if (toLowerCase(name) == "content-length")
         {
             if (_hasContentLength || value.empty())
@@ -296,6 +370,7 @@ Request::ParseStatus Request::parseHeaders(const std::string& raw)
 
             _hasContentLength = true;
         }
+        // Le seul encodage de transfert géré : chunked.
         else if (toLowerCase(name) == "transfer-encoding")
         {
             if (_isChunked || toLowerCase(value) != "chunked")
@@ -307,17 +382,26 @@ Request::ParseStatus Request::parseHeaders(const std::string& raw)
         pos = end + 1;
     }
 
+    // HTTP/1.1 exige un Host. HTTP/1.0 non.
     if (_version == "HTTP/1.1" && !hasHost)
         return (INVALID);
-        
+
+    // Les deux à la fois : ambigu, refusé (même raison que plus haut).
     if (_hasContentLength && _isChunked)
         return (INVALID);
 
+    // Le body commence juste après la ligne vide.
     _bodyStart = headersEnd + separatorSize;
 
     return (COMPLETE);
 }
 
+// ----------------------------------------------------------------------------
+// parseBody : le body, avec la limite de la location.
+// Avec Content-Length, la limite est vérifiée AVANT d'avoir reçu le body :
+// on répond 413 tout de suite, sans lire des mégaoctets pour rien.
+// Sans Content-Length ni chunked : pas de body (GET, DELETE).
+// ----------------------------------------------------------------------------
 Request::ParseStatus Request::parseBody(const std::string& raw, std::string::size_type maxBodySize)
 {
     _body.clear();
@@ -342,6 +426,7 @@ Request::ParseStatus Request::parseBody(const std::string& raw, std::string::siz
     return (COMPLETE);
 }
 
+// Accesseurs : renvoient des références const, sans copie, en lecture seule.
 const std::string& Request::getMethod() const
 {
 	return (_method);
@@ -372,8 +457,9 @@ bool Request::hasContentLength() const
 	return (_hasContentLength);
 }
 
+// Le client a-t-il dit comment trouver la fin de son body ? Un POST sans
+// Content-Length ni chunked reçoit 411 Length Required.
 bool Request::hasBodyFraming() const
 {
 	return (_hasContentLength || _isChunked);
 }
-
