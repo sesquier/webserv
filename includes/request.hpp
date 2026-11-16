@@ -30,8 +30,6 @@ class Request
 		
 		Request();
 
-		ParseStatus parse(const std::string& raw, std::string::size_type maxBodySize);
-		
 		ParseStatus parseHeaders(const std::string& raw);
 		ParseStatus parseBody(const std::string& raw, std::string::size_type maxBodySize);
 

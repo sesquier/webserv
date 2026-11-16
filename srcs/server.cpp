@@ -475,7 +475,8 @@ void Server::handleClientWrite(int clientFd)
     if (bytesSent > 0)
     {
         sentIt->second += static_cast<std::string::size_type>(bytesSent);
-		// _lastActivity[clientFd] = std::time(NULL);
+		// Progress counts as activity: a slow download is not cut after 30 s.
+		_lastActivity[clientFd] = std::time(NULL);
 
         if (sentIt->second == response.size())
             closeClient(clientFd);
