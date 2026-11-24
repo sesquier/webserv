@@ -1,0 +1,3 @@
+Pour siege, utilise http://127.0.0.1:8080/empty.html et pas localhost, à cause de l'IPv6 sur Fedora.
+
+check coment lancer tests sujet
