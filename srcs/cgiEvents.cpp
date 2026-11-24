@@ -1,7 +1,4 @@
-// The CGI part of the epoll loop. While its script runs, a client waits in
-// state CGI_RUNNING; the two pipes of the script are watched by epoll like
-// sockets: the loop writes the body when the script can take it, reads the
-// output when there is some, and never waits for a script.
+// The CGI part of the epoll loop: the script's pipes are watched like sockets.
 
 #include "server.hpp"
 #include <sys/epoll.h>
@@ -37,8 +34,7 @@ void Server::startCgiJob(int clientFd, const CgiRequest& cgi)
 	_clientStates[clientFd] = CGI_RUNNING;
 	try
 	{
-		// The client has nothing more to send: epoll only watches whether it
-		// leaves (EPOLLRDHUP), which closes the client and stops its script.
+		// The client is only watched for leaving (EPOLLRDHUP).
 		struct epoll_event event;
 
 		std::memset(&event, 0, sizeof(event));
@@ -61,6 +57,7 @@ void Server::startCgiJob(int clientFd, const CgiRequest& cgi)
 	}
 }
 
+// Adds a pipe of the script to epoll.
 void Server::watchCgiPipe(int pipeFd, unsigned int events, int clientFd)
 {
 	struct epoll_event event;
@@ -84,8 +81,7 @@ void Server::closeCgiFd(int& pipeFd)
 	pipeFd = -1;
 }
 
-// An event on a pipe: the input can take more body, or the output has data
-// (or is closed: read then returns 0, or -1 on an error).
+// An event on a pipe: writes the body, or reads the output.
 void Server::handleCgiEvent(int pipeFd)
 {
 	int clientFd = _cgiPipes[pipeFd];
@@ -104,6 +100,7 @@ void Server::handleCgiEvent(int pipeFd)
 	}
 }
 
+// One write of the body into the script's input.
 void Server::writeCgiBody(int clientFd)
 {
 	CgiJob& job = _cgiJobs[clientFd];
@@ -115,12 +112,12 @@ void Server::writeCgiBody(int clientFd)
 		job.bodySent += static_cast<std::string::size_type>(written);
 		job.lastActivity = std::time(NULL);
 	}
-	// All sent: EOF tells the script the body is complete. -1: the script
-	// stopped reading (SIGPIPE is ignored, see main); its output decides.
+	// All sent, or the script stopped reading: closing gives it EOF.
 	if (written <= 0 || job.bodySent == job.body.size())
 		closeCgiFd(job.process.inputFd);
 }
 
+// One read of the script's output.
 void Server::readCgiOutput(int clientFd)
 {
 	CgiJob&	job = _cgiJobs[clientFd];
@@ -133,16 +130,13 @@ void Server::readCgiOutput(int clientFd)
 		job.lastActivity = std::time(NULL);
 		return ;
 	}
-	// 0: the script closed its output (EOF), the output is complete.
-	// Its input is closed too: it cannot read a body it has finished answering.
+	// EOF or error: the output is complete.
 	closeCgiFd(job.process.inputFd);
 	closeCgiFd(job.process.outputFd);
 	reapCgiJob(clientFd, false);
 }
 
-// The output is complete: collects the script's exit status, then answers.
-// A script often closes its output a few microseconds before it exits: if
-// it still runs, it is checked again by checkCgiJobs, or stopped if force.
+// Collects the script's exit status and answers; false if it still runs (unless force).
 bool Server::reapCgiJob(int clientFd, bool force)
 {
 	CgiJob&	job = _cgiJobs[clientFd];
@@ -160,8 +154,7 @@ bool Server::reapCgiJob(int clientFd, bool force)
 		succeeded = true;
 	}
 	else
-		// A crash after the headers would look like a valid, empty page: the
-		// exit status shows it.
+		// The exit status reveals a crash after valid headers.
 		succeeded = (result > 0 && WIFEXITED(status) && WEXITSTATUS(status) == 0);
 
 	const LocationConfig*	location = job.location;
@@ -173,8 +166,7 @@ bool Server::reapCgiJob(int clientFd, bool force)
 	return (true);
 }
 
-// Stops a script and forgets it: the client is gone, or the script is too slow.
-// waitpid right after SIGKILL: the process ends at once, nothing to wait for.
+// Kills the script and forgets the job.
 void Server::abortCgiJob(int clientFd)
 {
 	std::map<int, CgiJob>::iterator it = _cgiJobs.find(clientFd);
@@ -188,8 +180,7 @@ void Server::abortCgiJob(int clientFd)
 	_cgiJobs.erase(it);
 }
 
-// Called after each round of events: scripts waiting to be reaped, and
-// scripts silent for too long.
+// After each round of events: reaps finished scripts, stops silent ones (504).
 void Server::checkCgiJobs(std::time_t now)
 {
 	std::map<int, CgiJob>::iterator it = _cgiJobs.begin();

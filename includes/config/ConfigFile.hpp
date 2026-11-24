@@ -3,8 +3,7 @@
 
 #include <string>
 
-// Returns the whole content of the configuration file.
-// Throws ConfigError if the path is missing, not a regular file or unreadable.
+// Returns the content of the configuration file; throws ConfigError.
 std::string readConfigFile(const std::string& path);
 
 #endif

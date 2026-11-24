@@ -5,9 +5,7 @@
 #include <vector>
 #include "config/Token.hpp"
 
-// Splits the raw text of the configuration file into tokens.
-// It knows nothing about the grammar: structural errors
-// (missing ';', unbalanced braces...) are reported by the parser.
+// Splits the configuration file into tokens; the grammar is the parser's job.
 class Tokenizer
 {
 	public:

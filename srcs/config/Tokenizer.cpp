@@ -44,8 +44,7 @@ bool Tokenizer::isSpecial(char c)
 	return c == '{' || c == '}' || c == ';';
 }
 
-// A word is made of printable characters that are neither
-// separators, special characters nor the start of a comment.
+// A word: printable characters, no separator, special character or '#'.
 bool Tokenizer::isWordChar(char c)
 {
 	unsigned char uc = static_cast<unsigned char>(c);

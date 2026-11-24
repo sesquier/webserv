@@ -1,5 +1,4 @@
-// CGI: what webserv needs to run a script and send back what it writes.
-// The variables follow RFC 3875, the CGI standard.
+// CGI: runs a script and reads back what it writes (RFC 3875).
 
 #include "cgi.hpp"
 #include "request.hpp"
@@ -23,7 +22,7 @@ static std::string numberToString(size_t number)
 	return (text.str());
 }
 
-// "/cgi-bin/hello.py?name=Bob" -> "name=Bob". Empty without a '?'.
+// "/cgi-bin/hello.py?name=Bob" -> "name=Bob".
 static std::string queryString(const std::string& target)
 {
 	std::string::size_type mark = target.find('?');
@@ -39,13 +38,7 @@ static std::string fileName(const std::string& path)
 	return (path.substr(path.find_last_of('/') + 1));
 }
 
-// "user-agent" -> "HTTP_USER_AGENT". Empty for a header that must not
-// become a variable:
-// - its own variable already: Content-Type, Content-Length;
-// - "proxy": HTTP_PROXY is read by many programs as their proxy setting, so a
-//   client could redirect the script's own requests (the "httpoxy" attack);
-// - a name with something else than letters, digits and '-': "X_Foo" would
-//   give the same variable as "X-Foo", a client could fake a header.
+// "user-agent" -> "HTTP_USER_AGENT". Empty for a header the script must not get.
 static std::string headerVariable(const std::string& name)
 {
 	if (name == "content-type" || name == "content-length" || name == "proxy")
@@ -67,27 +60,23 @@ static std::string headerVariable(const std::string& name)
 	return (variable);
 }
 
+// The environment of the script: request, script, body, headers and server.
 std::vector<std::string> buildCgiEnv(const Request& request, const std::string& urlPath,
 	const std::string& scriptPath, const ListenAddress& address)
 {
 	std::vector<std::string> env;
 
-	// The request: method, protocol, and what follows the '?' in the URL.
 	env.push_back("REQUEST_METHOD=" + request.getMethod());
 	env.push_back("QUERY_STRING=" + queryString(request.getTarget()));
 	env.push_back("SERVER_PROTOCOL=" + request.getVersion());
 
-	// The script: its path in the URL, and its file. The script runs in its own
-	// directory, so the file is named from there: "hello.py".
+	// The script runs in its own directory: its file is named from there.
 	env.push_back("SCRIPT_NAME=" + urlPath);
 	env.push_back("SCRIPT_FILENAME=" + fileName(scriptPath));
 
-	// The body arrives on stdin; its size tells the script how much to read.
 	if (request.getMethod() == "POST")
 		env.push_back("CONTENT_LENGTH=" + numberToString(request.getBody().size()));
 
-	// The headers: the type of the body, then every header as HTTP_<NAME>
-	// ("Cookie: id=42" -> HTTP_COOKIE=id=42).
 	const std::map<std::string, std::string>&	headers = request.getHeaders();
 	std::map<std::string, std::string>::const_iterator	it = headers.find("content-type");
 
@@ -101,7 +90,6 @@ std::vector<std::string> buildCgiEnv(const Request& request, const std::string& 
 			env.push_back(variable + "=" + it->second);
 	}
 
-	// The server that runs the script.
 	env.push_back("GATEWAY_INTERFACE=CGI/1.1");
 	env.push_back("SERVER_SOFTWARE=webserv");
 	env.push_back("SERVER_NAME=" + address.host);
@@ -130,29 +118,21 @@ static void closePipe(int fds[2])
 	close(fds[1]);
 }
 
-// In the child, which never returns from here: plugs the pipes on stdin and
-// stdout, moves to the script's directory, then becomes the interpreter.
-// If anything fails, the child exits without writing: the server sees an
-// empty output and answers 502.
+// In the child: pipes on stdin/stdout, chdir to the script, then execve.
 static void runScript(int toScript[2], int fromScript[2], const std::string& interpreter,
 	const std::string& scriptPath, const std::vector<std::string>& env)
 {
 	if (dup2(toScript[0], STDIN_FILENO) == -1 || dup2(fromScript[1], STDOUT_FILENO) == -1)
 		std::exit(1);
-	// stdin and stdout are the pipes now: the original fds are not needed, and
-	// a write end left open here would keep the server from ever seeing EOF.
+	// A write end left open here would keep the server from ever seeing EOF.
 	closePipe(toScript);
 	closePipe(fromScript);
-	// The child also inherited every fd of the server: listening sockets, epoll,
-	// other clients. Left open, a client closed by the server would stay
-	// connected until the script ends. 1024 is the usual limit of open fds.
+	// The fds inherited from the server: listening sockets, epoll, other clients.
 	for (int fd = 3; fd < 1024; fd++)
 		close(fd);
 	if (chdir(directoryOf(scriptPath).c_str()) == -1)
 		std::exit(1);
 
-	// execve wants NULL-terminated arrays of C strings:
-	// argv = { "/usr/bin/python3", "hello.py", NULL }, envp = { "NAME=value", ..., NULL }.
 	std::string			script = fileName(scriptPath);
 	std::vector<char*>	argv;
 	std::vector<char*>	envp;
@@ -168,6 +148,7 @@ static void runScript(int toScript[2], int fromScript[2], const std::string& int
 	std::exit(1);	// only reached if execve failed
 }
 
+// Forks the script with two non-blocking pipes: one for its input, one for its output.
 bool startCgi(const std::string& interpreter, const std::string& scriptPath,
 	const std::vector<std::string>& env, CgiProcess& process)
 {
@@ -193,7 +174,6 @@ bool startCgi(const std::string& interpreter, const std::string& scriptPath,
 	if (pid == 0)
 		runScript(toScript, fromScript, interpreter, scriptPath, env);
 
-	// The parent keeps one end of each pipe: it writes the body, reads the output.
 	close(toScript[0]);
 	close(fromScript[1]);
 	if (fcntl(toScript[1], F_SETFL, O_NONBLOCK) == -1
@@ -216,7 +196,6 @@ static bool isDigit(char c)
 	return (std::isdigit(static_cast<unsigned char>(c)) != 0);
 }
 
-// Header names ignore case: "Content-Type" and "content-type" are the same.
 static std::string toLower(const std::string& text)
 {
 	std::string lower = text;
@@ -226,8 +205,7 @@ static std::string toLower(const std::string& text)
 	return (lower);
 }
 
-// "Status: 404 Not Found" -> 404 and "Not Found". Three digits, then the
-// reason (optional), as on the first line of an HTTP response.
+// "Status: 404 Not Found" -> 404 and "Not Found".
 static bool parseStatus(const std::string& value, CgiOutput& result)
 {
 	if (value.size() < 3 || !isDigit(value[0]) || !isDigit(value[1])
@@ -243,7 +221,7 @@ static bool parseStatus(const std::string& value, CgiOutput& result)
 	return (true);
 }
 
-// "Content-Length: 42" -> 42. Digits only; refuses a length that would overflow.
+// "Content-Length: 42" -> 42. Digits only, no overflow.
 static bool parseLength(const std::string& value, std::string::size_type& length)
 {
 	if (value.empty() || value.size() > 18)
@@ -258,10 +236,10 @@ static bool parseLength(const std::string& value, std::string::size_type& length
 	return (true);
 }
 
+// Splits the script's output into status, headers and body; false if invalid.
 bool parseCgiOutput(const std::string& output, CgiOutput& result)
 {
-	// The headers end at the first blank line. Scripts often write "\n" only
-	// (Python's print), so "\n\n" is accepted as well as "\r\n\r\n".
+	// Python's print writes "\n": "\n\n" ends the headers as well as "\r\n\r\n".
 	std::string::size_type	headersEnd = output.find("\r\n\r\n");
 	std::string::size_type	lfHeadersEnd = output.find("\n\n");
 	std::string::size_type	separatorSize = 4;
@@ -310,7 +288,6 @@ bool parseCgiOutput(const std::string& output, CgiOutput& result)
 			result.contentType = value;
 		else if (toLower(name) == "content-length")
 		{
-			// Without it, the end of the output (EOF) marks the end of the body.
 			std::string::size_type length;
 
 			if (!parseLength(value, length) || length > result.body.size())
@@ -324,13 +301,12 @@ bool parseCgiOutput(const std::string& output, CgiOutput& result)
 			result.headers += name + ": " + value + "\r\n";
 		}
 	}
-	// A script that only gives "Location:" asks for a redirection.
+	// "Location:" without "Status:" asks for a redirection.
 	if (hasLocation && !hasStatus)
 	{
 		result.status = 302;
 		result.reason = "Found";
 	}
-	// A body must say what it is.
 	if (result.contentType.empty() && !result.body.empty())
 		return (false);
 	return (true);

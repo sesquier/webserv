@@ -22,7 +22,7 @@ bool LocationConfig::matchesPath(const std::string& requestPath) const
 	return requestPath.size() == path.size() || requestPath[path.size()] == '/';
 }
 
-// "a..b" and "..." are ordinary names: only a whole ".." segment goes up a directory.
+// True if the path has a ".." segment ("a..b" is an ordinary name).
 static bool hasParentSegment(const std::string& path)
 {
 	size_t pos = path.find("..");
@@ -39,7 +39,7 @@ static bool hasParentSegment(const std::string& path)
 	return false;
 }
 
-// Own root: it replaces the location prefix. Inherited root: the whole path is added.
+// URL -> file path; "" if refused. An own root replaces the location prefix.
 std::string resolvePath(const LocationConfig& location, const std::string& path)
 {
 	if (path.empty() || path[0] != '/' || hasParentSegment(path) || !location.matchesPath(path))

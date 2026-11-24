@@ -18,6 +18,7 @@
 
 static const std::string::size_type MAX_HEADERS_SIZE = 16 * 1024;
 
+// Header names ignore case.
 static std::string toLowerCase(const std::string& value)
 {
     std::string result = value;
@@ -30,6 +31,7 @@ static std::string toLowerCase(const std::string& value)
     return (result);
 }
 
+// Decodes a chunked body ("size\r\ndata\r\n" ... "0\r\n\r\n").
 static Request::ParseStatus decodeChunkedBody(const std::string& raw, std::string::size_type bodyStart, std::string::size_type maxBodySize, std::string& decoded)
 {
     decoded.clear();
@@ -158,6 +160,7 @@ Request::Request() : _method(), _target(), _version(), _hasContentLength(false),
 
 }
 
+// Parses the request line and the headers, once the empty line has arrived.
 Request::ParseStatus Request::parseHeaders(const std::string& raw)
 {
     _method.clear();
@@ -318,6 +321,7 @@ Request::ParseStatus Request::parseHeaders(const std::string& raw)
     return (COMPLETE);
 }
 
+// Reads the body announced by Content-Length or chunked encoding.
 Request::ParseStatus Request::parseBody(const std::string& raw, std::string::size_type maxBodySize)
 {
     _body.clear();
@@ -372,6 +376,7 @@ bool Request::hasContentLength() const
 	return (_hasContentLength);
 }
 
+// True if the body has a Content-Length or is chunked.
 bool Request::hasBodyFraming() const
 {
 	return (_hasContentLength || _isChunked);

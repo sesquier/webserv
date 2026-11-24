@@ -49,7 +49,7 @@ class Server
 		std::map<int, bool> _requestStarted;
 
 		std::map<int, std::string> _responses;
-		std::map<int, std::string::size_type> _bytesSent; // contient le nombre d'octets deja envoyes
+		std::map<int, std::string::size_type> _bytesSent; // bytes of the response already sent
 		std::map<int, std::time_t> _lastActivity;
 
 		// A running script and what the loop has exchanged with it so far.

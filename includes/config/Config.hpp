@@ -7,9 +7,7 @@
 #include "config/ConfigError.hpp"
 #include "config/ServerConfig.hpp"
 
-// Single header for the code outside the config module.
-// Reads, parses and validates the configuration file.
-// Throws ConfigError if the file is invalid.
+// Reads, parses and validates the configuration file; throws ConfigError.
 std::vector<ServerConfig> loadConfig(const std::string& path);
 
 // Prints the final configuration: every value, after defaults and inheritance.

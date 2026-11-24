@@ -69,8 +69,7 @@ void ConfigParser::expect(Token::Type type, const std::string& what)
 	advance();
 }
 
-// True on '}'. Reaching the end of the file means the block opened
-// at openLine was never closed: report that line, it is where the fix goes.
+// True on '}'. Throws at the end of the file: the block was never closed.
 bool ConfigParser::isBlockEnd(int openLine) const
 {
 	if (isAtEnd())
@@ -152,8 +151,7 @@ LocationConfig ConfigParser::parseLocation()
 	return location;
 }
 
-// Reads "name arg1 arg2 ;". Hitting '{', '}' or the end of the file
-// before ';' means the ';' was forgotten.
+// Reads "name arg1 arg2 ;", or throws on a missing ';'.
 ConfigParser::Directive ConfigParser::parseDirective()
 {
 	Directive directive;
@@ -180,8 +178,7 @@ void ConfigParser::rejectNestedBlock(const std::string& context) const
 		throw ConfigError(current().line, "'server' block is not allowed inside a " + context);
 }
 
-// Runs at the end of the block: the server's directives may follow its locations.
-// Defaults come first so that locations inherit complete values.
+// At the end of the block: defaults, then inheritance by the locations.
 void ConfigParser::finalizeServer(ServerConfig& server)
 {
 	applyServerDefaults(server);
@@ -221,8 +218,7 @@ void ConfigParser::ensureRootLocation(ServerConfig& server)
 	server.locations.push_back(location);
 }
 
-// hasOwnRoot stays false for an inherited root: resolvePath depends on it.
-// map::insert keeps existing keys, so a location's own error pages win.
+// What a location does not set comes from its server; its own error pages win.
 void ConfigParser::inheritFromServer(LocationConfig& location, const ServerConfig& server)
 {
 	if (!location.hasOwnRoot)
@@ -244,8 +240,7 @@ std::string ConfigParser::normalizeLocationPath(const std::string& path)
 	return normalized;
 }
 
-// Converts a text made only of digits. The first character is checked because
-// strtol would accept a sign. It returns LONG_MAX when the number is too big.
+// Converts a text made only of digits (no sign), refusing overflows.
 bool ConfigParser::parseNumber(const std::string& text, long& value)
 {
 	char* end;
@@ -347,8 +342,7 @@ void ConfigParser::requireArgCount(const Directive& directive, size_t min, size_
 		throw ConfigError(directive.line, "wrong number of arguments for '" + directive.name + "'");
 }
 
-// listen, error_page and cgi may repeat with different keys:
-// their own handlers check for a repeated key.
+// listen, error_page and cgi may repeat: their handlers check repeated keys.
 void ConfigParser::rejectDuplicate(std::set<std::string>& seen, const Directive& directive) const
 {
 	if (directive.name == "listen" || directive.name == "error_page" || directive.name == "cgi")
@@ -475,8 +469,7 @@ void ConfigParser::parseLocationBodySize(LocationConfig& location, const Directi
 	location.maxBodySize = readBodySize(directive);
 }
 
-// "1024" is in bytes, "10K" and "10M" are multiplied. The limit is checked
-// before the multiplication, which could otherwise overflow.
+// "1024" bytes, "10K" or "10M"; checked before multiplying, to avoid overflow.
 size_t ConfigParser::readBodySize(const Directive& directive)
 {
 	requireArgCount(directive, 1);
@@ -497,8 +490,7 @@ size_t ConfigParser::readBodySize(const Directive& directive)
 	return static_cast<size_t>(value * multiplier);
 }
 
-// "8080" listens on every interface. "localhost" becomes 127.0.0.1 here,
-// so that comparing two addresses as text stays correct.
+// "8080" (every interface) or "host:port"; "localhost" becomes 127.0.0.1.
 void ConfigParser::parseListen(ServerConfig& server, const Directive& directive)
 {
 	requireArgCount(directive, 1);
@@ -531,8 +523,7 @@ void ConfigParser::parseListen(ServerConfig& server, const Directive& directive)
 	server.listens.push_back(address);
 }
 
-// 0.0.0.0 takes the port on every interface, so bind() would fail
-// for any other address on that port.
+// 0.0.0.0 conflicts with any other address on the same port.
 bool ConfigParser::addressesConflict(const ListenAddress& a, const ListenAddress& b)
 {
 	if (a.port != b.port)

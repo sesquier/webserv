@@ -1,5 +1,4 @@
-// Builds the HTTP response of a parsed request: routing through the location,
-// then GET, POST and DELETE. The network loop lives in server.cpp.
+// Builds the HTTP response of a request: routing, then GET, POST and DELETE.
 
 #include "server.hpp"
 #include "request.hpp"
@@ -12,6 +11,7 @@
 #include <set>
 #include <cctype>
 
+// Letters, digits, '.', '_' and '-' only, and not "." or "..".
 static bool isValidUploadFilename(const std::string& filename)
 {
     if (filename.empty() || filename == "." || filename == "..")
@@ -27,6 +27,7 @@ static bool isValidUploadFilename(const std::string& filename)
     return (true);
 }
 
+// Creates the file (never overwrites it): 201, 409 if it exists, 500 on error.
 static int saveUploadedFile(const std::string& filePath, const std::string& body)
 {
     int fileFd = open(
@@ -94,9 +95,7 @@ static int hexValue(char c)
 	return (-1);
 }
 
-// "%20" -> ' ': a URL encodes every special character as '%' and two hex digits.
-// Returns false on a malformed '%' or on "%00", which would cut the path short
-// once it is given to a C function.
+// "%20" -> ' '. False on a malformed '%' or on "%00".
 bool decodePath(const std::string& encoded, std::string& decoded)
 {
 	for (std::string::size_type i = 0; i < encoded.size(); i++)
@@ -106,7 +105,6 @@ bool decodePath(const std::string& encoded, std::string& decoded)
 			decoded += encoded[i];
 			continue;
 		}
-		// Two hex digits must follow the '%'.
 		if (i + 2 >= encoded.size())
 			return (false);
 
@@ -121,8 +119,7 @@ bool decodePath(const std::string& encoded, std::string& decoded)
 	return (true);
 }
 
-// The reverse, for the links of the autoindex page: "a#b.txt" -> "a%23b.txt".
-// Without it, '#' or '?' in a file name would cut the link.
+// "a#b.txt" -> "a%23b.txt", for the links of the autoindex page.
 static std::string encodePath(const std::string& path)
 {
 	const char*	digits = "0123456789ABCDEF";
@@ -144,8 +141,7 @@ static std::string encodePath(const std::string& path)
 	return (encoded);
 }
 
-// "./www/site1/hello.py" -> ".py". Empty if the file name has no extension:
-// a '.' in a directory name ("./www/v1.2/README") does not count.
+// "./www/site1/hello.py" -> ".py". Empty without extension.
 static std::string fileExtension(const std::string& filePath)
 {
 	std::string::size_type dotPos = filePath.find_last_of('.');
@@ -155,6 +151,7 @@ static std::string fileExtension(const std::string& filePath)
 	return (filePath.substr(dotPos));
 }
 
+// Content-Type from the file extension.
 static std::string contentTypeFor(const std::string& filePath)
 {
 	std::string extension = fileExtension(filePath);
@@ -180,8 +177,7 @@ static std::string contentTypeFor(const std::string& filePath)
 	return ("application/octet-stream");
 }
 
-// The interpreter that runs this file, from the location's "cgi" directives
-// (".py" -> "/usr/bin/python3"). Empty: the file is not a CGI script here.
+// ".py" -> "/usr/bin/python3" from the location's "cgi" directives; empty if not a script.
 static std::string cgiInterpreter(const std::string& filePath, const LocationConfig& location)
 {
 	std::map<std::string, std::string>::const_iterator it = location.cgi.find(fileExtension(filePath));
@@ -191,6 +187,7 @@ static std::string cgiInterpreter(const std::string& filePath, const LocationCon
 	return (it->second);
 }
 
+// Reason phrase of a redirection code.
 static std::string redirectReason(int code)
 {
 	if (code == 301)
@@ -235,8 +232,7 @@ static bool readWholeFile(const std::string& filePath, std::string& content)
 	return (bytesRead == 0);
 }
 
-// A file name is shown inside the HTML page: "<", ">", "&" and quotes must not
-// be read as HTML, or a file named "<script>..." would run in the browser.
+// Escapes "<", ">", "&" and quotes of a file name shown in the HTML page.
 static std::string escapeHtml(const std::string& text)
 {
 	std::string escaped;
@@ -257,8 +253,7 @@ static std::string escapeHtml(const std::string& text)
 	return (escaped);
 }
 
-// Names of the directory, sorted; a sub-directory ends with '/'.
-// Returns false if the directory cannot be opened.
+// Sorted names of the directory, sub-directories ending with '/'.
 static bool readDirectory(const std::string& dirPath, std::set<std::string>& names)
 {
 	DIR* dir = opendir(dirPath.c_str());
@@ -298,6 +293,7 @@ static std::string directoryListing(const std::string& path, const std::set<std:
 	return (html);
 }
 
+// Reason phrase of a status code (RFC 9110).
 static std::string reasonPhrase(int code)
 {
 	switch (code)
@@ -334,10 +330,8 @@ static std::string defaultErrorPage(int code, const std::string& reason)
 	return (page.str());
 }
 
-// Applies the rules shared by every method, then chooses the handler.
-// The order matters: unknown method, redirection, then allowed methods.
-// A request for a script returns no response: it fills cgi, and the network
-// loop runs the script.
+// Checks method, redirection and permissions, then calls the right handler.
+// A CGI request only fills cgi: the network loop runs the script.
 std::string Server::handleRequest(const Request& request, const ServerConfig& server,
 	CgiRequest& cgi) const
 {
@@ -346,7 +340,7 @@ std::string Server::handleRequest(const Request& request, const ServerConfig& se
 
 	if (method != "GET" && method != "POST" && method != "DELETE")
 		return (buildError(501, NULL));
-	// Decoded before any check: "%2e%2e" must reach resolvePath as "..".
+	// Decoded first: "%2e%2e" must reach resolvePath as "..".
 	if (!decodePath(requestPath(request.getTarget()), path) || path.empty() || path[0] != '/')
 		return (buildError(400, NULL));
 
@@ -368,6 +362,7 @@ std::string Server::handleRequest(const Request& request, const ServerConfig& se
 	return (handleDelete(path, location));
 }
 
+// GET: a file, or a directory.
 std::string Server::handleGet(const std::string& path, const LocationConfig& location) const
 {
 	std::string filePath = resolvePath(location, path);
@@ -382,13 +377,11 @@ std::string Server::handleGet(const std::string& path, const LocationConfig& loc
 	return (serveFile(filePath, location));
 }
 
-// In order: add the missing '/', serve the index file, list the content
-// (autoindex on), or refuse (autoindex off).
+// Redirects to "dir/", then serves the index, the autoindex page, or 403.
 std::string Server::handleDirectory(const std::string& path, const std::string& dirPath,
 	const LocationConfig& location) const
 {
-	// Without the final '/', the browser would resolve the links of the page
-	// from the parent directory: "/files" + "notes.txt" gives "/notes.txt".
+	// Without the final '/', the page's relative links would point to the parent.
 	if (path[path.size() - 1] != '/')
 		return (buildResponse(301, "Moved Permanently", "", "text/plain",
 			"Location: " + path + "/\r\n"));
@@ -448,6 +441,7 @@ std::string Server::handlePost(const Request& request, const std::string& path,
 	return (buildError(500, &location));
 }
 
+// DELETE: removes a regular file (204).
 std::string Server::handleDelete(const std::string& path, const LocationConfig& location) const
 {
 	std::string filePath = resolvePath(location, path);
@@ -462,8 +456,7 @@ std::string Server::handleDelete(const std::string& path, const LocationConfig& 
 	return (buildResponse(204, "No Content", ""));
 }
 
-// Checks the script, then fills cgi with everything needed to run it.
-// Returns an error response, or "" when the script must be run.
+// Checks the script and fills cgi; returns an error response, or "" to run it.
 std::string Server::handleCgi(const Request& request, const std::string& path,
 	const ServerConfig& server, const LocationConfig& location, CgiRequest& cgi) const
 {
@@ -478,16 +471,13 @@ std::string Server::handleCgi(const Request& request, const std::string& path,
 	cgi.pending = true;
 	cgi.interpreter = cgiInterpreter(scriptPath, location);
 	cgi.scriptPath = scriptPath;
-	// The parser requires a "listen" in every server: listens[0] exists.
 	cgi.env = buildCgiEnv(request, path, scriptPath, server.listens[0]);
 	cgi.body = request.getBody();
 	cgi.location = &location;
 	return ("");
 }
 
-// The response from what the script wrote: its status, its headers, its body.
-// 502 Bad Gateway when the output does not follow CGI: the server in front
-// (webserv) got a bad answer from the program behind it.
+// The response built from the script's output; 502 if the output is invalid.
 std::string Server::cgiResponse(const std::string& output, const LocationConfig& location) const
 {
 	CgiOutput result;
@@ -501,8 +491,7 @@ std::string Server::cgiResponse(const std::string& output, const LocationConfig&
 	return (buildResponse(result.status, result.reason, result.body, result.contentType, result.headers));
 }
 
-// The page of the location's error_page for this code if it can be read,
-// otherwise a generated page. The status code stays the error code either way.
+// The location's error_page for this code, or a generated page.
 std::string Server::buildError(int code, const LocationConfig* location,
 	const std::string& extraHeaders) const
 {
@@ -514,7 +503,7 @@ std::string Server::buildError(int code, const LocationConfig* location,
 		struct stat info;
 		std::string content;
 
-		// stat first, as in serveFile: an error page that is a FIFO must not block.
+		// stat first: an error page that is a FIFO must not block.
 		if (page != location->errorPages.end()
 			&& stat(page->second.c_str(), &info) == 0 && S_ISREG(info.st_mode)
 			&& readWholeFile(page->second, content))
@@ -523,6 +512,7 @@ std::string Server::buildError(int code, const LocationConfig* location,
 	return (buildResponse(code, reason, defaultErrorPage(code, reason), "text/html", extraHeaders));
 }
 
+// Status line, headers, empty line, then the body.
 std::string Server::buildResponse(int statusCode, const std::string& reason, const std::string& body,
 	const std::string& contentType, const std::string& extraHeaders) const
 {

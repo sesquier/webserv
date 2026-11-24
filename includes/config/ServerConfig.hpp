@@ -28,8 +28,7 @@ struct ServerConfig
 
 	ServerConfig();
 
-	// Longest matching prefix for a request path (without the query string).
-	// Never fails on a parsed config: every server has a "/" location.
+	// Longest matching prefix; every server has a "/" location.
 	const LocationConfig&	findLocation(const std::string& path) const;
 };
 

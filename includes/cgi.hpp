@@ -8,13 +8,11 @@
 
 class Request;
 
-// The environment of the script, as "NAME=value" strings: everything the
-// script must know about the request, except the body, which goes on stdin.
+// The environment of the script, as "NAME=value" strings.
 std::vector<std::string>	buildCgiEnv(const Request& request, const std::string& urlPath,
 								const std::string& scriptPath, const ListenAddress& address);
 
-// A request that a script must answer: handleRequest fills it instead of
-// building a response, and the network loop starts the script from it.
+// A request that a script must answer, filled by handleRequest.
 struct CgiRequest
 {
 	bool						pending;		// true: no response yet, run the script
@@ -35,9 +33,7 @@ struct CgiProcess
 	int		outputFd;	// read the script's stdout here, until EOF
 };
 
-// Starts "interpreter script" in the script's directory, with env as its
-// environment. Both fds are non-blocking, for epoll. Returns false if the
-// pipes or the process cannot be created (the server then answers 500).
+// Starts the script with two non-blocking pipes; false on failure (500).
 bool						startCgi(const std::string& interpreter, const std::string& scriptPath,
 								const std::vector<std::string>& env, CgiProcess& process);
 
@@ -51,8 +47,7 @@ struct CgiOutput
 	std::string	body;
 };
 
-// Reads the output of a script: headers, a blank line, the body.
-// Returns false if it does not follow CGI (the server then answers 502).
+// Splits the script's output into status, headers and body; false if invalid (502).
 bool						parseCgiOutput(const std::string& output, CgiOutput& result);
 
 #endif

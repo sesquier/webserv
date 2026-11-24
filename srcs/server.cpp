@@ -45,6 +45,7 @@ static int openListeningSocket(const struct addrinfo* info)
 	return (fd);
 }
 
+// "127.0.0.1:8080", for messages.
 static std::string addressToString(const ListenAddress& address)
 {
 	std::ostringstream text;
@@ -53,14 +54,13 @@ static std::string addressToString(const ListenAddress& address)
 	return (text.str());
 }
 
-// An error found before the request is routed (unreadable request, idle
-// client) uses the error pages of the server's "/" location: it inherits
-// the error_page directives of the server block.
+// Location used for errors found before routing: the server's "/".
 static const LocationConfig* defaultLocation(const ServerConfig* server)
 {
 	return (&server->findLocation("/"));
 }
 
+// Creates the epoll instance; the sockets are opened by run().
 Server::Server(const std::vector<ServerConfig>& configs) : _epollFd(-1), _configs(configs)
 {
 	_epollFd = epoll_create(1);
@@ -68,6 +68,7 @@ Server::Server(const std::vector<ServerConfig>& configs) : _epollFd(-1), _config
 		throw std::runtime_error("epoll_create failed");
 }
 
+// Stops the scripts, closes the listening sockets and epoll.
 Server::~Server()
 {
 	while (!_cgiJobs.empty())
@@ -88,6 +89,7 @@ void Server::setupListeningSockets()
 	}
 }
 
+// Opens one listening socket and adds it to epoll.
 void Server::addListener(const ListenAddress& address, const ServerConfig& config)
 {
 	struct addrinfo hints;
@@ -123,6 +125,7 @@ void Server::addListener(const ListenAddress& address, const ServerConfig& confi
 	std::cout << "Listening on " << addressToString(address) << std::endl;
 }
 
+// The main loop: one epoll_wait, then events, CGI jobs and timeouts.
 void Server::run()
 {
     setupListeningSockets();
@@ -131,8 +134,7 @@ void Server::run()
 
     while (true)
     {
-        // While scripts run, wake up often: checkCgiJobs collects the ones
-        // that have just exited and stops the ones that are too slow.
+        // Wake up more often while scripts run, to reap or stop them in time.
         int count = epoll_wait(_epollFd, events, 10, _cgiJobs.empty() ? 1000 : 50);
 
         if (count == -1)
@@ -209,6 +211,7 @@ void Server::run()
     }
 }
 
+// Dispatches one epoll event: accept, CGI pipe, recv or send.
 void Server::handleEvent(const struct epoll_event& event)
 {
 	int fd = event.data.fd;
@@ -326,9 +329,7 @@ void Server::handleEvent(const struct epoll_event& event)
 			_requestStarted[fd] = true;
 			_lastActivity[fd] = std::time(NULL);
 
-			// RFC 9112 section 2.2: empty lines received before the request
-			// line (an extra Enter in nc or telnet) are ignored. A connection
-			// carries one request, so the buffer always starts with it.
+			// RFC 9112 2.2: empty lines before the request line are ignored.
 			std::string::size_type requestStart = _clients[fd].find_first_not_of("\r\n");
 
 			if (requestStart == std::string::npos)
@@ -433,6 +434,7 @@ void Server::handleEvent(const struct epoll_event& event)
 	}
 }
 
+// Removes a client: epoll, fd, script and every stored data.
 void Server::closeClient(int clientFd)
 {
 	abortCgiJob(clientFd);
@@ -447,6 +449,7 @@ void Server::closeClient(int clientFd)
 	_requestStarted.erase(clientFd);
 }
 
+// Watches the client for writing (EPOLLOUT).
 void Server::enableWriteEvent(int clientFd)
 {
 	struct epoll_event event;
@@ -459,6 +462,7 @@ void Server::enableWriteEvent(int clientFd)
 		throw std::runtime_error("Failed to enable EPOLLOUT");
 }
 
+// One send of the response; closes the client once all is sent.
 void Server::handleClientWrite(int clientFd)
 {
     std::map<int, std::string>::iterator responseIt = _responses.find(clientFd);
@@ -500,6 +504,7 @@ void Server::handleClientWrite(int clientFd)
 
 }
 
+// Stores the response and switches the client to WRITING.
 void Server::queueResponse(int clientFd, const std::string& response)
 {
 	_responses[clientFd] = response;
