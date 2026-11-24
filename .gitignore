@@ -7,3 +7,7 @@ config_test
 .vscode/
 *.swp
 .DS_Store
+
+# Files downloaded during the upload demo
+tmp/recu/*
+!tmp/recu/.gitkeep
