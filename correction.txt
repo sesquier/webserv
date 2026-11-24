@@ -1,3 +1,92 @@
 Pour siege, utilise http://127.0.0.1:8080/empty.html et pas localhost, à cause de l'IPv6 sur Fedora.
 
 check coment lancer tests sujet
+
+test de non bloquant si grosse requête:
+curl -s --limit-rate 100K localhost:8080/big.txt -o /dev/null &
+curl -s -o /dev/null -w '%{http_code} en %{time_total}s\n' localhost:8080/
+
+pour tester méthodes GET POST DELETE:
+	echo "ceci est un test" > tmp/test.txt
+	curl -i --data-binary @tmp/test.txt localhost:8080/upload/test.txt
+	curl localhost:8080/upload/test.txt
+	pareil pour une image
+
+	pour reupload l'image du serveur jusqu'au dossier local:
+	curl -o tmp/recieved/image.jpg localhost:8080/upload/image.jpg
+
+	curl -i -X DELETE localhost:8080/upload/image.jpg
+
+
+Différentes interfaces : ./webserv config/demo/interfaces.conf
+
+curl 127.0.0.1:8080/        # site 1
+curl 127.0.0.2:8080/        # site 2 : même port, autre adresse IP
+
+> « Une interface, c'est une adresse IP de la machine. 
+On peut écouter sur le même port à deux adresses différentes. »
+
+Limiter la taille du body:
+	# plus court que 100 octets → 201
+	curl -X POST -H "Content-Type: plain/text" --data "BODY IS HERE court" localhost:8080/upload/court.txt
+
+	# plus long que 100 octets → 413
+	curl -X POST -H "Content-Type: plain/text" --data "BODY IS HERE et ce texte est beaucoup plus long que la limite de cent octets fixee dans la config, donc refus" localhost:8080/upload/long.txt
+
+	# même texte long sur /grand (limite 1K) → 201 : la location remplace la limite du server
+	curl -X POST -H "Content-Type: plain/text" --data "BODY IS HERE et ce texte est beaucoup plus long que la limite de cent octets fixee dans la config, donc refus" localhost:8080/large/long.txt
+
+POST : créer le fichier → 201 (bonjour = 7 octets, d'où Content-Length: 7)
+
+tests avec netcat nc:
+	nc 127.0.0.1 8080
+
+	POST : créer le fichier → 201 (bonjour = 7 octets, d'où Content-Length: 7)
+	printf 'POST /upload/test.txt HTTP/1.1\r\nHost: localhost\r\nContent-Length: 7\r\n\r\nbonjour' | nc 127.0.0.1 8080
+	
+	GET : le relire → 200, et le corps affiche bonjour
+	printf 'GET /upload/test.txt HTTP/1.1\r\nHost: localhost\r\n\r\n' | nc 127.0.0.1 8080
+
+	DELETE : le supprimer → 204
+	printf 'DELETE /upload/test2.txt HTTP/1.1\r\nHost: localhost\r\n\r\n' | nc 127.0.0.1 8080
+	
+	GET à nouveau → 404 : il n'existe plus
+	printf 'GET /upload/test2.txt HTTP/1.1\r\nHost: localhost\r\n\r\n' | nc 127.0.0.1 8080
+	
+	Les mêmes méthodes, refusées sur / → 405, car / n'autorise que GET :
+	printf 'DELETE /index.html HTTP/1.1\r\nHost: localhost\r\n\r\n' | nc 127.0.0.1 8080
+	printf 'POST /test.txt HTTP/1.1\r\nHost: localhost\r\nContent-Length: 7\r\n\r\nbonjour' | nc 127.0.0.1 8080
+
+Requêtes inconnues sans aucun crash:
+	curl -i -X FOO localhost:8080/                                        # 501 Not Implemented
+	printf 'FOO / HTTP/1.1\r\nHost: localhost\r\n\r\n' | nc -q1 localhost 8080   # 501
+	printf 'BLABLA\r\n\r\n' | nc -q1 localhost 8080                       # 400 Bad Request
+	printf 'GET / HTTP/1.1\r\n\r\n' | nc -q1 localhost 8080              # 400 : Host manquant (obligatoire en HTTP/1.1)
+	curl -i localhost:8080/                                               # 200 : le serveur tourne toujours
+
+CGI:
+	curl "localhost:8080/cgi-bin/hello.py?name=Simon"            # GET  → "Bonjour Simon !"
+	curl --data "name=Ayrton" localhost:8080/cgi-bin/hello.py    # POST → "Bonjour Ayrton !"
+
+	le script ouvre data.py depuis son dossier et pas depuis la racine car on chdir avant execv
+	curl localhost:8080/cgi-bin/readfile.py
+
+	erreurs scripts cassés gérées:
+	curl -i localhost:8080/cgi-bin/error.py     # le script plante       → 502
+	curl -i localhost:8080/cgi-bin/loop.py      # boucle infinie         → 504 après 10 s
+	curl -i localhost:8080/cgi-bin/nope.py      # le script n'existe pas → 404
+
+	localhost:8080/cgi-bin/hello.py
+	curl localhost:8080/cgi-bin/env.py -> pour check all variables que le script reçoit
+
+siege
+	siege -b -c 50 -r 200 http://127.0.0.1:8080/empty.html
+	siege -b -c 50 -r 200 http://localhost:8080/empty.html
+
+	ss -tan | grep 8080 | awk '{print $1}' | sort | uniq -c  -> 1 socket d'écoute
+
+
+CGI +
+	curl localhost:8080/cgi-bin/hello.py    # Python
+	curl localhost:8080/cgi-bin/hello.pl    # Perl
+	curl localhost:8080/cgi-bin/hello.sh    # Bash
