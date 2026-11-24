@@ -325,6 +325,18 @@ void Server::handleEvent(const struct epoll_event& event)
 			_clients[fd].append(buffer, bytesReceived);
 			_requestStarted[fd] = true;
 			_lastActivity[fd] = std::time(NULL);
+
+			// RFC 9112 section 2.2: empty lines received before the request
+			// line (an extra Enter in nc or telnet) are ignored. A connection
+			// carries one request, so the buffer always starts with it.
+			std::string::size_type requestStart = _clients[fd].find_first_not_of("\r\n");
+
+			if (requestStart == std::string::npos)
+			{
+				_clients[fd].clear();
+				return ;
+			}
+			_clients[fd].erase(0, requestStart);
 		}
 		else
 		{
