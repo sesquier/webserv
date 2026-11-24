@@ -1,1 +1,1 @@
-Un deuxième fichier dans /docs.
+A second file in /docs.

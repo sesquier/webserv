@@ -1,1 +1,1 @@
-Un fichier dans /docs, dossier listé par autoindex.
+A file in /docs, a directory listed by autoindex.

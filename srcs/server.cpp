@@ -423,6 +423,19 @@ void Server::handleEvent(const struct epoll_event& event)
 			_clients[fd].append(buffer, bytesReceived);
 			_requestStarted[fd] = true;
 			_lastActivity[fd] = std::time(NULL);
+
+			// RFC 9112 §2.2 : on ignore les lignes vides reçues avant la ligne
+			// de requête (un Entrée de trop dans nc ou telnet). Une connexion
+			// ne porte qu'une requête, donc le buffer commence toujours par
+			// elle : ces \r et \n ne peuvent pas appartenir à autre chose.
+			std::string::size_type requestStart = _clients[fd].find_first_not_of("\r\n");
+
+			if (requestStart == std::string::npos)
+			{
+				_clients[fd].clear();
+				return ;
+			}
+			_clients[fd].erase(0, requestStart);
 		}
 		else
 		{
