@@ -1,1 +1,0 @@
-A file in /docs, a directory listed by autoindex.
