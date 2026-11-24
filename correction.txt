@@ -79,7 +79,7 @@ CGI:
 	localhost:8080/cgi-bin/hello.py
 	curl localhost:8080/cgi-bin/env.py -> pour check all variables que le script reçoit
 
-siege
+siege:
 	siege -b -c 50 -r 200 http://127.0.0.1:8080/empty.html
 	siege -b -c 50 -r 200 http://localhost:8080/empty.html
 
